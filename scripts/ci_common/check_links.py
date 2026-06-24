@@ -39,6 +39,9 @@ class LinkChecker:
         user_agent = config.get('user_agent', 'Mozilla/5.0 (compatible; RediSearch-LinkChecker/1.0)')
         self.session.headers.update({'User-Agent': user_agent})
         self.checked_urls: Set[str] = set()
+        # Set by check_all_files to the resolved scan root; relative links that
+        # resolve outside it are rejected rather than probed/read.
+        self.root: Path = None
         # Guards checked_urls across the ThreadPoolExecutor workers in
         # check_all_files. The shared requests.Session is only used for
         # concurrent GETs after its headers are set above (thread-safe), so it
@@ -109,6 +112,18 @@ class LinkChecker:
 
         return links
 
+    def _within_root(self, path: Path) -> bool:
+        """True if `path` resolves inside the scan root (or no root is set, e.g.
+        in unit tests). Keeps relative-link checks from touching files outside
+        the scanned tree."""
+        if self.root is None:
+            return True
+        try:
+            path.resolve().relative_to(self.root)
+            return True
+        except ValueError:
+            return False
+
     @staticmethod
     def _trim_bare_url(url: str) -> str:
         r"""Strip trailing prose punctuation a bare-URL regex (\S+) sweeps up,
@@ -169,6 +184,9 @@ class LinkChecker:
         verify the anchor resolves to a heading or explicit anchor in the target."""
         path_part, _, fragment = file_path.partition('#')
         path = Path(path_part)
+
+        if not self._within_root(path):
+            return False, "Path escapes scan root"
 
         if not path.exists():
             return False, "Path not found"
@@ -380,6 +398,9 @@ class LinkChecker:
 
     def check_all_files(self, directory: str) -> bool:
         """Check all Markdown files in directory. Returns True if all links are valid."""
+        # Confine relative-link resolution to this tree so a (possibly
+        # fork-authored) .md can't probe or read files outside the scanned repo.
+        self.root = Path(directory).resolve()
         md_files = self.find_markdown_files(directory)
 
         if not md_files:
