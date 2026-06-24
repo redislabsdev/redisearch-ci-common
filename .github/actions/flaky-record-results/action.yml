@@ -9,9 +9,11 @@ description: |
 
   This action never fails the job: it warns on connection errors so a flaky-DB
   outage cannot break the test pipeline. The calling step should set
-  `if: always()` so failures are recorded even when tests fail. The DB CLI
-  (scripts/ci_common/flaky_db.py) is bundled in this repo, so the action is
-  self-contained.
+  `if: always()` so failures are recorded even when tests fail.
+
+  Container-safe: the DB CLI is fetched into the (mounted) workspace via a
+  checkout, since `github.action_path` points at the runner host and is not
+  mounted inside container jobs.
 
 inputs:
   redis-url:
@@ -33,6 +35,12 @@ inputs:
     description: "Short label for this job/shard, recorded with each result"
     required: false
     default: ""
+  ci-common-ref:
+    description: >
+      Ref of redisearch-ci-common to fetch the DB CLI from. Set this to the same
+      ref you pinned this action to (e.g. v1).
+    required: false
+    default: v1
 
 runs:
   using: composite
@@ -59,6 +67,15 @@ runs:
         echo "Resolved flaky target branch: $branch"
         echo "FLAKY_BRANCH=$branch" >> "$GITHUB_ENV"
 
+    - name: Fetch shared flaky DB CLI
+      # Into the workspace (mounted in container jobs), not action_path (host).
+      uses: actions/checkout@v6
+      with:
+        repository: redislabsdev/redisearch-ci-common
+        ref: ${{ inputs.ci-common-ref }}
+        path: .redisearch-ci-common
+        persist-credentials: false
+
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
@@ -66,7 +83,7 @@ runs:
 
     - name: Install dependencies
       shell: bash -l -eo pipefail {0}
-      run: pip install 'redis>=6,<7'
+      run: python3 -m pip install 'redis>=6,<7'
 
     - name: Record results
       shell: bash -l -eo pipefail {0}
@@ -80,6 +97,4 @@ runs:
         JOB_NAME: ${{ inputs.job-name != '' && inputs.job-name || github.job }}
         FAILED_FILE: ${{ inputs.failed-file }}
         PASSED_FILE: ${{ inputs.passed-file }}
-      # flaky_db.py is bundled in this repo; reference it relative to the action
-      # (action_path -> .github/actions/flaky-record-results, so go up 3 to root).
-      run: python3 "${{ github.action_path }}/../../../scripts/ci_common/flaky_db.py" record
+      run: python3 "$GITHUB_WORKSPACE/.redisearch-ci-common/scripts/ci_common/flaky_db.py" record
