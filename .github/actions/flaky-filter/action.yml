@@ -1,0 +1,105 @@
+name: Filter flaky tests from a test list
+description: |
+  Fetch active flaky marks for the current branch from the REPO/BRANCH-keyed
+  flaky DB and filter them out of a caller-provided test-id list, emitting the
+  path to a filtered TESTFILE the runner can consume.
+
+  The caller enumerates its own tests (that step is product-specific, e.g.
+  `LIST=1 make pytest`) and passes the list as `tests`. This action only does
+  the generic fetch + filter, so it stays framework/product agnostic.
+
+  Fail-open: emits an empty `testfile` when there are no active marks, when the
+  DB is unset/unreachable, or on any error — callers treat empty as "run the
+  full suite". Container-safe: the DB CLI is fetched into the (mounted)
+  workspace via checkout, since github.action_path is not mounted in containers.
+
+inputs:
+  redis-url:
+    description: "Redis connection URL (rediss://...). No marks fetched if empty."
+    required: true
+  tests:
+    description: "Path to the enumerated test-id list (one RLTest id per line)."
+    required: true
+  output:
+    description: "Path to write the filtered TESTFILE."
+    required: true
+  branch:
+    description: "Branch to fetch marks for. Defaults to the PR / merge-queue target."
+    required: false
+    default: ""
+  ci-common-ref:
+    description: "Ref of redisearch-ci-common to fetch the DB CLI from (match your pin)."
+    required: false
+    default: v1
+
+outputs:
+  testfile:
+    description: "Filtered TESTFILE path; empty if no marks or any step failed."
+    value: ${{ steps.filter.outputs.testfile }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve target branch
+      shell: bash -l -eo pipefail {0}
+      env:
+        OVERRIDE: ${{ inputs.branch }}
+        MERGE_GROUP_BASE: ${{ github.event.merge_group.base_ref }}
+        BASE_REF: ${{ github.base_ref }}
+        REF_NAME: ${{ github.ref_name }}
+      run: |
+        if [ -n "$OVERRIDE" ]; then
+          branch="$OVERRIDE"
+        elif [ -n "$MERGE_GROUP_BASE" ]; then
+          branch="${MERGE_GROUP_BASE#refs/heads/}"
+        elif [ -n "$BASE_REF" ]; then
+          branch="$BASE_REF"
+        else
+          branch="$REF_NAME"
+        fi
+        echo "Resolved flaky target branch: $branch"
+        echo "FLAKY_BRANCH=$branch" >> "$GITHUB_ENV"
+
+    - name: Fetch shared flaky DB CLI
+      uses: actions/checkout@v6
+      with:
+        repository: redislabsdev/redisearch-ci-common
+        ref: ${{ inputs.ci-common-ref }}
+        path: .redisearch-ci-common
+        persist-credentials: false
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.x"
+
+    - name: Install dependencies
+      shell: bash -l -eo pipefail {0}
+      run: python3 -m pip install 'redis>=6,<7'
+
+    - name: Fetch marks and filter
+      id: filter
+      shell: bash -l -eo pipefail {0}
+      env:
+        REDIS_URL: ${{ inputs.redis-url }}
+        REPO: ${{ github.repository }}
+        BRANCH: ${{ env.FLAKY_BRANCH }}
+        TESTS: ${{ inputs.tests }}
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        cli="$GITHUB_WORKSPACE/.redisearch-ci-common/scripts/ci_common/flaky_db.py"
+        marks="$RUNNER_TEMP/flaky_marks.txt"
+        # Fail-open: a DB outage must not break the test pipeline.
+        python3 "$cli" fetch --output-json "$RUNNER_TEMP/flaky_marks.json" --output-list "$marks" || \
+          echo "::warning::flaky fetch failed; running the full suite"
+        : > "$OUTPUT"
+        if [ -s "$marks" ]; then
+          python3 "$cli" filter --tests "$TESTS" --marks "$marks" --output "$OUTPUT" || : > "$OUTPUT"
+        else
+          echo "No active flaky marks — running the full suite"
+        fi
+        if [ -s "$OUTPUT" ]; then
+          echo "testfile=$OUTPUT" >> "$GITHUB_OUTPUT"
+        else
+          echo "testfile=" >> "$GITHUB_OUTPUT"
+        fi

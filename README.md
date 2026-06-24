@@ -35,6 +35,7 @@ plumbing.
 | `pr-size-label` reusable workflow | [`.github/workflows/pr-size-label.yml`](.github/workflows/pr-size-label.yml) | Label a PR by diff size. Add a thin `on: pull_request` caller. |
 | `spellcheck` reusable workflow | [`.github/workflows/spellcheck.yml`](.github/workflows/spellcheck.yml) | codespell over a PR's changed files. The repo supplies its own `.codespell/` config. |
 | `link-check` reusable workflow | [`.github/workflows/link-check.yml`](.github/workflows/link-check.yml) | Validate Markdown links/anchors. Self-contained — bundles `scripts/ci_common/check_links.py`. |
+| `stale` reusable workflow | [`.github/workflows/stale.yml`](.github/workflows/stale.yml) | Mark/close stale issues & PRs (actions/stale). Opt-in — for repos that track work in GitHub issues. |
 
 ### Flaky-test DB
 
@@ -46,15 +47,20 @@ RLTest suites can quarantine known-flaky tests consistently.
 | `flaky-mark` reusable workflow | [`.github/workflows/flaky-mark.yml`](.github/workflows/flaky-mark.yml) | Add a flaky mark (test id, reason, Jira key, expiry). Add a thin `on: workflow_dispatch` caller. |
 | `flaky-unmark` reusable workflow | [`.github/workflows/flaky-unmark.yml`](.github/workflows/flaky-unmark.yml) | Remove a flaky mark. |
 | `flaky_db.py` CLI | [`scripts/ci_common/flaky_db.py`](scripts/ci_common/flaky_db.py) | `mark`/`unmark`/`fetch`/`filter`/`record`. No-op when `REDIS_URL` is unset (keeps fork-PR CI green). |
+| `flaky-filter` composite action | [`.github/actions/flaky-filter`](.github/actions/flaky-filter/action.yml) | Fetch marks and filter them out of a caller-provided test list → filtered TESTFILE. Caller enumerates its own tests (product-specific); empty output = run full suite. |
 | `flaky-record-results` composite action | [`.github/actions/flaky-record-results`](.github/actions/flaky-record-results/action.yml) | Record an RLTest run's failed/passed test ids to the DB from inside a test job (`if: always()`). Never fails the job. |
 
 > Unlike the units above (which are test-framework agnostic), the flaky tooling
 > is **RLTest-shaped**: it expects test ids in RLTest's
 > `<test_file>:<test_name>[variant]` form — which is what the consuming suites
-> emit. Marks only take effect once the consuming repo's **test pipeline** calls
-> `flaky_db.py fetch`/`filter` to skip marked tests (and `flaky-record-results`
-> to log per-run results); that wiring is product-specific and lives in each
-> repo's own test workflow — intentionally **not** here.
+> emit. The pieces — mark/unmark, `flaky-filter` (skip marked tests), and
+> `flaky-record-results` (log per-run results) — cover the whole pipeline, so a
+> consuming repo needs no local `flaky_db.py`. Only the *test enumeration* (e.g.
+> `LIST=1 make pytest`) stays product-specific in the caller.
+>
+> **Container-safe:** the two composite actions fetch the DB CLI into the mounted
+> workspace via a checkout (not `github.action_path`, which isn't mounted inside
+> container jobs). Pass `ci-common-ref` matching the ref you pinned the action to.
 
 ### Security posture (baked into `codex-run`)
 
