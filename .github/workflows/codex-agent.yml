@@ -71,6 +71,15 @@ on:
         required: false
         type: string
         default: ""
+      allow-users:
+        description: >
+          Comma-separated non-`[bot]` logins to allow past the actor gate. Needed
+          alongside allow-bot-users for actors that appear without the `[bot]`
+          suffix on some events (e.g. the bare `github-merge-queue` on schedule
+          runs). List such actors in both.
+        required: false
+        type: string
+        default: ""
     secrets:
       app-private-key:
         description: Private key for the GitHub App whose id is `app-id`.
@@ -93,9 +102,11 @@ jobs:
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.app-private-key }}
-          # Omit `owner`/`repositories`: create-github-app-token then scopes the
-          # token to THIS (caller) repo only — the least-privilege default —
-          # without depending on the shape of the caller's event payload.
+          owner: ${{ github.repository_owner }}
+          # Scope the token to the caller repo (matches the OSS backport token
+          # pattern). Under workflow_call the github context is the caller's
+          # event, so github.event.repository.name is the caller repo.
+          repositories: ${{ github.event.repository.name }}
           permission-contents: ${{ inputs.permission-contents }}
           permission-pull-requests: ${{ inputs.permission-pull-requests }}
 
@@ -133,3 +144,4 @@ jobs:
           prompt-file: ${{ inputs.prompt-file }}
           allow-bots: ${{ inputs.allow-bots }}
           allow-bot-users: ${{ inputs.allow-bot-users }}
+          allow-users: ${{ inputs.allow-users }}

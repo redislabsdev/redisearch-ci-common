@@ -43,32 +43,33 @@ runs:
     - name: Run Codex
       id: codex
       continue-on-error: true
-      # Pinned to a commit SHA (Sonar S7670); keep in sync with codex-run. To
-      # upgrade: look up openai/codex-action tags, set the SHA the new tag
-      # resolves to, and update this comment.
-      uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1 # v1.8
+      uses: openai/codex-action@v1
       with:
         openai-api-key: ${{ inputs.openai-api-key }}
         prompt-file: ${{ inputs.prompt-file }}
         working-directory: ${{ inputs.working-directory }}
-        # Read-only sandbox: the agent analyzes, it cannot modify the tree.
-        # `drop-sudo` additionally drops sudo from the Codex subprocess — required
-        # because triage reads CI logs that may carry attacker-controlled content
-        # (fork-PR triage especially), so a prompt injection in the logs cannot
-        # escalate to running privileged commands and exfiltrating the API key.
         sandbox: read-only
+        # `drop-sudo` keeps the read-only sandbox but also drops sudo capabilities
+        # from the Codex subprocess. Required when CI logs (which Codex reads)
+        # carry attacker-controlled content — for fork-PR triage especially — so a
+        # prompt injection in the logs cannot escalate to running privileged
+        # commands and exfiltrating the API key.
         safety-strategy: drop-sudo
-        # Triage often runs on post-merge / scheduled events whose actor is a bot
-        # (github-merge-queue, github-actions[bot]); allow them past the action's
-        # collaborator gate. `allow-bots: true` covers github-actions[bot]. The
-        # merge-queue actor differs by event: `push` runs see
-        # `github-merge-queue[bot]` (allow-bot-users), but `schedule` runs see the
-        # bare `github-merge-queue`, which the action's `[bot]`-suffix check
-        # rejects and never looks up in allow-bot-users — so it goes in
-        # allow-users, comma-joined with any caller-supplied users.
+        # Triage runs on post-merge/scheduled events whose actor is a bot
+        # (github-merge-queue, github-actions[bot]); allow them past the
+        # action's collaborator gate. Sandbox + safety remain read-only.
+        # `allow-bots: true` only covers github-actions[bot] (hardcoded in
+        # codex-action's trusted set). For merge-queue, `github.actor`
+        # differs by event: `push` runs see `github-merge-queue[bot]`,
+        # but `schedule` runs see the bare `github-merge-queue`. The
+        # action's `isBotActor` check (endsWith "[bot]") rejects the
+        # bare form and never consults `allow-bot-users`, so we list
+        # the bare form under `allow-users` and the suffixed form under
+        # `allow-bot-users`.
         allow-bots: true
+        allow-users: github-merge-queue
         allow-bot-users: github-merge-queue[bot]
-        allow-users: ${{ inputs.allow-users != '' && format('github-merge-queue,{0}', inputs.allow-users) || 'github-merge-queue' }}
+        allow-users: ${{ inputs.allow-users }}
 
     - name: Read triage output
       id: read

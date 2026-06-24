@@ -38,6 +38,16 @@ inputs:
     description: Comma-separated bot logins to trust when allow-bots is true.
     required: false
     default: ""
+  allow-users:
+    description: >
+      Comma-separated non-`[bot]` logins to allow past the actor gate. Needed
+      alongside allow-bot-users because the same actor can appear in two forms
+      depending on the event — e.g. the merge queue is `github-merge-queue[bot]`
+      on push/merge events (allow-bot-users) but the bare `github-merge-queue`
+      on schedule events, which the action's `[bot]`-suffix check only matches
+      via allow-users. List such actors in both.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -65,3 +75,4 @@ runs:
         codex-args: ${{ inputs.codex-args }}
         allow-bots: ${{ inputs.allow-bots }}
         allow-bot-users: ${{ inputs.allow-bot-users }}
+        allow-users: ${{ inputs.allow-users }}
