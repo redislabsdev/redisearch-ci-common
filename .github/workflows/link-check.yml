@@ -68,8 +68,11 @@ jobs:
 
       # (No artifact upload: the bundled check_links.py prints to stdout and
       # never writes link-check-*.log, so an upload step would always be empty.)
+      # Gate on PR context (not just failure()): as a reusable workflow this can
+      # be called from non-PR events, where context.issue.number is unset and
+      # createComment would error and mask the real link failure.
       - name: Comment on PR
-        if: failure()
+        if: failure() && github.event.pull_request
         uses: actions/github-script@v8
         with:
           script: |

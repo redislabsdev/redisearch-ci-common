@@ -47,14 +47,20 @@ jobs:
 
       - name: Run codespell on changed files
         env:
-          # Contexts are available here (unlike workflow_call input defaults).
-          # Prefer an explicit base, then the PR's actual base branch (set on
-          # pull_request events), and only then the repo default branch — so a PR
-          # targeting a non-default branch is diffed against the right base.
-          BASE_REF: ${{ inputs.base-ref || github.base_ref || github.event.repository.default_branch }}
+          OVERRIDE_BASE: ${{ inputs.base-ref }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_ref }}
+          PR_BASE: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CONFIG: ${{ inputs.config }}
         run: |
-          git fetch origin "${BASE_REF}"
+          # Resolve the base to diff against: explicit input, then the merge-queue
+          # target (github.base_ref is unset on merge_group events), then the PR
+          # base, then the repo default branch.
+          if [ -n "${OVERRIDE_BASE}" ]; then base="${OVERRIDE_BASE}"
+          elif [ -n "${MERGE_GROUP_BASE}" ]; then base="${MERGE_GROUP_BASE#refs/heads/}"
+          elif [ -n "${PR_BASE}" ]; then base="${PR_BASE}"
+          else base="${DEFAULT_BRANCH}"; fi
+          git fetch origin "${base}"
           # NUL-delimit so changed paths containing spaces aren't split by xargs.
-          git diff -z --name-only "origin/${BASE_REF}" --diff-filter=AM \
+          git diff -z --name-only "origin/${base}" --diff-filter=AM \
             | xargs -0 -r codespell --config "${CONFIG}"
