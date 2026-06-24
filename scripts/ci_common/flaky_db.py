@@ -173,7 +173,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                 for s in result["skips"]
             ),
         ])
-    return 0
+
+    # Distinguish a real DB failure (configured Redis unreachable/erroring) from
+    # the intentional no-op cases ("no-url" / clean), so a caller that checks the
+    # exit code can tell fetch actually failed instead of silently running with
+    # no skips applied. Callers that want to stay green on a flaky-DB outage
+    # should wrap this step with continue-on-error.
+    return 1 if result["status"] == "error" else 0
 
 
 # ---------------------------------------------------------------- filter

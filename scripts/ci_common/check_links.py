@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -38,6 +39,11 @@ class LinkChecker:
         user_agent = config.get('user_agent', 'Mozilla/5.0 (compatible; RediSearch-LinkChecker/1.0)')
         self.session.headers.update({'User-Agent': user_agent})
         self.checked_urls: Set[str] = set()
+        # Guards checked_urls across the ThreadPoolExecutor workers in
+        # check_all_files. The shared requests.Session is only used for
+        # concurrent GETs after its headers are set above (thread-safe), so it
+        # needs no lock.
+        self._lock = threading.Lock()
 
     def find_markdown_files(self, directory: str) -> List[Path]:
         """Find all Markdown files in the directory, excluding certain subdirectories."""
@@ -127,7 +133,9 @@ class LinkChecker:
 
     def check_url_with_anchor(self, url: str, link_type: str = 'absolute') -> Tuple[bool, str]:
         """Check if URL is valid, including anchor verification."""
-        if url in self.checked_urls:
+        with self._lock:
+            already_checked = url in self.checked_urls
+        if already_checked:
             return True, "Already checked"
 
         try:
@@ -147,10 +155,12 @@ class LinkChecker:
             return False, "Path not found"
 
         if path.is_file():
-            self.checked_urls.add(file_path)
+            with self._lock:
+                self.checked_urls.add(file_path)
             return True, "File exists"
         elif path.is_dir():
-            self.checked_urls.add(file_path)
+            with self._lock:
+                self.checked_urls.add(file_path)
             return True, "Directory exists"
         else:
             return False, "Path exists but is neither file nor directory"
@@ -229,7 +239,8 @@ class LinkChecker:
                     if not anchor_found:
                         return False, f"Anchor '#{anchor}' not found"
 
-            self.checked_urls.add(url)
+            with self._lock:
+                self.checked_urls.add(url)
             return True, f"OK ({response.status_code})"
 
         except (requests.exceptions.HTTPError, requests.exceptions.ConnectionError,
