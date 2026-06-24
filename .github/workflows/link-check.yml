@@ -66,15 +66,8 @@ jobs:
             --max-workers ${{ inputs.max-workers }} \
             --delay ${{ inputs.delay }}
 
-      - name: Upload results on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: link-check-results
-          path: |
-            link-check-*.log
-          retention-days: 7
-
+      # (No artifact upload: the bundled check_links.py prints to stdout and
+      # never writes link-check-*.log, so an upload step would always be empty.)
       - name: Comment on PR
         if: failure()
         uses: actions/github-script@v8

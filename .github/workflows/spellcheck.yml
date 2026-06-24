@@ -55,5 +55,6 @@ jobs:
           CONFIG: ${{ inputs.config }}
         run: |
           git fetch origin "${BASE_REF}"
-          git diff --name-only "origin/${BASE_REF}" --diff-filter=AM \
-            | xargs -r codespell --config "${CONFIG}"
+          # NUL-delimit so changed paths containing spaces aren't split by xargs.
+          git diff -z --name-only "origin/${BASE_REF}" --diff-filter=AM \
+            | xargs -0 -r codespell --config "${CONFIG}"
