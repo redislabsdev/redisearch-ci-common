@@ -1,0 +1,100 @@
+name: Flaky tests — mark (reusable)
+
+# Add a flaky-test mark to the shared, REPO/BRANCH-keyed flaky DB. Reusable:
+# the consuming repo adds a thin `on: workflow_dispatch` caller that forwards
+# these inputs. The DB CLI (scripts/ci_common/flaky_db.py) is bundled here, so
+# this is self-contained; the Redis URL is a caller secret (one shared DB across
+# repos — the marks are namespaced by repository).
+#
+# Marking only takes effect if the consuming repo's test pipeline also consults
+# the DB (flaky_db.py fetch/filter) to skip marked tests — that wiring is
+# product-specific and lives in each repo's test workflow.
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: 'Branch the mark applies to (e.g. master, 8.6, or * for all)'
+        type: string
+        required: true
+      test_id:
+        description: "RLTest id: <test_file>:<test_name> (no .py, no [variant])"
+        type: string
+        required: true
+      reason:
+        type: string
+        required: true
+      jira_key:
+        description: 'Jira ticket tracking the flake (e.g. MOD-12345)'
+        type: string
+        required: true
+      expires_in_days:
+        type: string
+        required: false
+        default: '30'
+      ci-common-ref:
+        description: Ref of redisearch-ci-common to fetch flaky_db.py from.
+        type: string
+        default: main
+      runs-on:
+        type: string
+        default: ubuntu-slim
+    secrets:
+      redis-url:
+        description: Redis connection string (rediss://...) for the flaky DB.
+        required: true
+
+jobs:
+  mark:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout ci-common (flaky_db.py)
+        uses: actions/checkout@v6
+        with:
+          repository: redislabsdev/redisearch-ci-common
+          ref: ${{ inputs.ci-common-ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install 'redis>=6,<7'
+
+      - name: Mark test as flaky
+        env:
+          REDIS_URL: ${{ secrets.redis-url }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ inputs.branch }}
+          TEST_ID: ${{ inputs.test_id }}
+          REASON: ${{ inputs.reason }}
+          JIRA_KEY: ${{ inputs.jira_key }}
+          DAYS: ${{ inputs.expires_in_days }}
+          ACTOR: ${{ github.actor }}
+        run: python3 scripts/ci_common/flaky_db.py mark
+
+      - name: Summary
+        if: success()
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ inputs.branch }}
+          TEST_ID: ${{ inputs.test_id }}
+          JIRA_KEY: ${{ inputs.jira_key }}
+          REASON: ${{ inputs.reason }}
+          DAYS: ${{ inputs.expires_in_days }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "### Flaky mark recorded :white_check_mark:"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Repo | \`$REPO\` |"
+            echo "| Branch | \`$BRANCH\` |"
+            echo "| Test | \`$TEST_ID\` |"
+            echo "| Jira | $JIRA_KEY |"
+            echo "| Reason | $REASON |"
+            echo "| Expires in | $DAYS days |"
+            echo "| Marked by | @$ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,59 @@
+name: PR size label (reusable)
+
+# Label a PR by its diff size. Reusable wrapper around codelytv/pr-size-labeler
+# with the RediSearch family's default thresholds — callers add a thin
+# `on: pull_request` workflow that `uses:` this one. All thresholds/labels are
+# overridable via inputs.
+
+on:
+  workflow_call:
+    inputs:
+      xs_max_size:
+        type: string
+        default: "10"
+      s_max_size:
+        type: string
+        default: "100"
+      m_max_size:
+        type: string
+        default: "500"
+      l_max_size:
+        type: string
+        default: "1000"
+      fail_if_xl:
+        type: string
+        default: "false"
+      files_to_ignore:
+        type: string
+        default: "*.md .gitignore"
+      runs-on:
+        type: string
+        default: ubuntu-latest
+
+jobs:
+  label:
+    name: Label the PR size
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: codelytv/pr-size-labeler@v1
+        with:
+          xs_label: 'size:XS'
+          xs_max_size: ${{ inputs.xs_max_size }}
+          s_label: 'size:S'
+          s_max_size: ${{ inputs.s_max_size }}
+          m_label: 'size:M'
+          m_max_size: ${{ inputs.m_max_size }}
+          l_label: 'size:L'
+          l_max_size: ${{ inputs.l_max_size }}
+          xl_label: 'size:XL'
+          fail_if_xl: ${{ inputs.fail_if_xl }}
+          message_if_xl: >
+            This PR exceeds the recommended size of ${{ inputs.l_max_size }} lines.
+            Please make sure you are NOT addressing multiple issues with one PR.
+            Note this PR might be rejected due to its size.
+          github_api_url: 'https://api.github.com'
+          files_to_ignore: ${{ inputs.files_to_ignore }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

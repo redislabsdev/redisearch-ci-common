@@ -1,0 +1,67 @@
+name: Codex run
+description: >
+  Run a Codex agent against the checked-out repository with the RediSearch
+  family's standard security posture. Step-level building block: drop this into
+  a job after you have checked out the target repo, configured git, and set the
+  context env vars your prompt reads. The agent's filesystem is confined to the
+  workspace; only outbound network (for `git push` / `gh`) is granted.
+
+inputs:
+  openai-api-key:
+    description: OpenAI API key for Codex.
+    required: true
+  prompt-file:
+    description: Path to the prompt file the agent runs (relative to the workspace).
+    required: true
+  gh-token:
+    description: >
+      Token exported as GH_TOKEN for the agent's `gh` / `git push` calls.
+      Usually a scoped GitHub App installation token minted by the caller.
+    required: true
+  sandbox:
+    description: Codex sandbox mode.
+    required: false
+    default: workspace-write
+  safety-strategy:
+    description: Codex safety strategy (drop-sudo blocks privilege escalation).
+    required: false
+    default: drop-sudo
+  codex-args:
+    description: Extra `-c` overrides for codex. Default enables outbound network.
+    required: false
+    default: -c sandbox_workspace_write.network_access=true
+  allow-bots:
+    description: Whether to allow bot actors to trigger the agent.
+    required: false
+    default: "false"
+  allow-bot-users:
+    description: Comma-separated bot logins to trust when allow-bots is true.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Pinned to a commit SHA (Sonar S7670): a third-party action referenced by a
+    # mutable tag could be re-pointed at malicious code. `uses:` cannot be
+    # templated from an input, so the pin lives here as a literal; the trailing
+    # comment records the human-readable version. To upgrade: look up
+    # openai/codex-action tags, set the SHA the new tag resolves to, update the
+    # comment, and re-validate the consuming repos.
+    - name: Run Codex
+      uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1 # v1.8
+      env:
+        GH_TOKEN: ${{ inputs.gh-token }}
+      with:
+        openai-api-key: ${{ inputs.openai-api-key }}
+        prompt-file: ${{ inputs.prompt-file }}
+        # Confine the agent to the workspace and punch out only the one
+        # capability it needs — outbound network for `git push` / `gh` — via the
+        # codex network override (honored by Linux/Landlock runners). This is far
+        # narrower than danger-full-access; drop-sudo keeps the agent from
+        # escalating privileges on the runner.
+        sandbox: ${{ inputs.sandbox }}
+        safety-strategy: ${{ inputs.safety-strategy }}
+        codex-args: ${{ inputs.codex-args }}
+        allow-bots: ${{ inputs.allow-bots }}
+        allow-bot-users: ${{ inputs.allow-bot-users }}

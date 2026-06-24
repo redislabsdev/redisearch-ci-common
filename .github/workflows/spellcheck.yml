@@ -1,0 +1,60 @@
+name: Spellcheck (reusable)
+
+# Run codespell over the files a PR changed relative to its base branch.
+# Reusable: callers add a thin caller that `uses:` this one. Each repo supplies
+# its own codespell config (default: a `.codespell/` directory with
+# `requirements.txt` and `.codespellrc`) — that config is repo-specific, the
+# workflow is not.
+
+on:
+  workflow_call:
+    inputs:
+      base-ref:
+        description: "Branch to diff against. Default: the repo's default branch."
+        type: string
+        default: ""
+      config:
+        description: codespell config file.
+        type: string
+        default: .codespell/.codespellrc
+      requirements:
+        description: pip requirements file pinning codespell.
+        type: string
+        default: .codespell/requirements.txt
+      runs-on:
+        type: string
+        default: ubuntu-slim
+
+permissions:
+  contents: read
+
+jobs:
+  spellcheck:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install codespell
+        run: pip install -r ${{ inputs.requirements }}
+
+      - name: Run codespell on changed files
+        env:
+          # Contexts are available here (unlike workflow_call input defaults).
+          # Prefer an explicit base, then the PR's actual base branch (set on
+          # pull_request events), and only then the repo default branch — so a PR
+          # targeting a non-default branch is diffed against the right base.
+          BASE_REF: ${{ inputs.base-ref || github.base_ref || github.event.repository.default_branch }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${BASE_REF}"
+          git diff --name-only "origin/${BASE_REF}" --diff-filter=AM \
+            | xargs -r codespell --config "${CONFIG}"

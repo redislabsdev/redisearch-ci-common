@@ -1,0 +1,81 @@
+name: Flaky tests — unmark (reusable)
+
+# Remove a flaky-test mark from the shared, REPO/BRANCH-keyed flaky DB.
+# Companion to flaky-mark.yml; see it for the model. The consuming repo adds a
+# thin `on: workflow_dispatch` caller that forwards these inputs.
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: 'Branch the mark applies to (must match the original mark — use * if it was a wildcard)'
+        type: string
+        required: true
+      test_id:
+        description: "RLTest id: <test_file>:<test_name> (must match the original mark)"
+        type: string
+        required: true
+      reason:
+        description: 'Why are we unmarking? (e.g. "fixed in #1234")'
+        type: string
+        required: true
+      ci-common-ref:
+        description: Ref of redisearch-ci-common to fetch flaky_db.py from.
+        type: string
+        default: main
+      runs-on:
+        type: string
+        default: ubuntu-slim
+    secrets:
+      redis-url:
+        description: Redis connection string (rediss://...) for the flaky DB.
+        required: true
+
+jobs:
+  unmark:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout ci-common (flaky_db.py)
+        uses: actions/checkout@v6
+        with:
+          repository: redislabsdev/redisearch-ci-common
+          ref: ${{ inputs.ci-common-ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install 'redis>=6,<7'
+
+      - name: Unmark flaky test
+        env:
+          REDIS_URL: ${{ secrets.redis-url }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ inputs.branch }}
+          TEST_ID: ${{ inputs.test_id }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+        run: python3 scripts/ci_common/flaky_db.py unmark
+
+      - name: Summary
+        if: success()
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ inputs.branch }}
+          TEST_ID: ${{ inputs.test_id }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "### Flaky mark removed :white_check_mark:"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Repo | \`$REPO\` |"
+            echo "| Branch | \`$BRANCH\` |"
+            echo "| Test | \`$TEST_ID\` |"
+            echo "| Reason | $REASON |"
+            echo "| Unmarked by | @$ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"
