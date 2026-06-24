@@ -39,11 +39,14 @@ RLTest suites can quarantine known-flaky tests consistently.
 | `flaky-mark` reusable workflow | [`.github/workflows/flaky-mark.yml`](.github/workflows/flaky-mark.yml) | Add a flaky mark (test id, reason, Jira key, expiry). Add a thin `on: workflow_dispatch` caller. |
 | `flaky-unmark` reusable workflow | [`.github/workflows/flaky-unmark.yml`](.github/workflows/flaky-unmark.yml) | Remove a flaky mark. |
 | `flaky_db.py` CLI | [`scripts/ci_common/flaky_db.py`](scripts/ci_common/flaky_db.py) | `mark`/`unmark`/`fetch`/`filter`/`record`. No-op when `REDIS_URL` is unset (keeps fork-PR CI green). |
+| `flaky-record-results` composite action | [`.github/actions/flaky-record-results`](.github/actions/flaky-record-results/action.yml) | Record an RLTest run's failed/passed test ids to the DB from inside a test job (`if: always()`). Never fails the job. |
 
-> Marks only take effect if the consuming repo's **test pipeline** also calls
-> `flaky_db.py fetch`/`filter` to skip marked tests (and, optionally, `record` to
-> log per-run results). That wiring is product-specific and lives in each repo's
-> own test workflow — it is intentionally **not** in this repo.
+> The DB CLI and `record` action operate purely on RLTest's
+> `<test_file>:<test_name>[variant]` id format, so they are test-framework
+> generic. But marks only take effect once the consuming repo's **test
+> pipeline** calls `flaky_db.py fetch`/`filter` to skip marked tests (and
+> `flaky-record-results` to log per-run results). That wiring is product-specific
+> and lives in each repo's own test workflow — intentionally **not** here.
 
 ### Security posture (baked into `codex-run`)
 
