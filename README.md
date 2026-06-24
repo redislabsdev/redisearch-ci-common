@@ -16,9 +16,16 @@ plumbing.
 
 | Unit | Path | Use it when… |
 |---|---|---|
-| `codex-run` composite action | [`.github/actions/codex-run`](.github/actions/codex-run/action.yml) | you need to run Codex as **a step** inside a job you already control (interleaving it between your own git steps). |
-| `codex-agent` reusable workflow | [`.github/workflows/codex-agent.yml`](.github/workflows/codex-agent.yml) | you want a whole **job** that mints a scoped App token, checks out a repo, optionally runs a resolver, then runs Codex — driven by a label/comment trigger. |
+| `codex-run` composite action | [`.github/actions/codex-run`](.github/actions/codex-run/action.yml) | you need to run Codex as **a step** that can **modify** the tree (workspace-write), inside a job you already control. |
+| `codex-ci-triage` composite action | [`.github/actions/codex-ci-triage`](.github/actions/codex-ci-triage/action.yml) | you need Codex to **analyze, read-only** (CI logs, reports) and hand back its summary as step outputs for a Slack/PR notification. Never fails the job. |
+| `codex-agent` reusable workflow | [`.github/workflows/codex-agent.yml`](.github/workflows/codex-agent.yml) | you want a whole **job** that mints a scoped App token, checks out the caller repo, optionally runs a resolver, then runs Codex — driven by a label/comment trigger. |
 | `common.py` helpers | [`scripts/ci_common/common.py`](scripts/ci_common/common.py) | your resolver script needs `gh` / `$GITHUB_OUTPUT` / context-file helpers. |
+
+> **Triage / backport workflows themselves are per-repo, not here.** Each repo's
+> triage and backport-agent workflows carry product-specific triggers, CI-report
+> formats, and prompts, so they live in the consuming repo as thin callers of
+> these runners (`codex-run` for write flows like backport, `codex-ci-triage` for
+> read-only analysis). The shared, reusable substrate is what lives here.
 
 ### Shared CI utilities
 

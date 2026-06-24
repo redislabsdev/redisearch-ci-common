@@ -1,0 +1,104 @@
+name: Codex CI triage
+description: >
+  Run Codex read-only to analyze CI failures (or any artifact under the working
+  directory) and expose the result as outputs you can embed into notifications
+  (Slack, PR comments). The read-only counterpart to `codex-run`: the agent
+  cannot modify the repo, and Codex failures never fail the calling job.
+
+inputs:
+  openai-api-key:
+    description: OpenAI API key for Codex.
+    required: true
+  prompt-file:
+    description: Path to the Codex prompt file (markdown).
+    required: true
+  working-directory:
+    description: Working directory for Codex execution.
+    required: false
+    default: .
+  allow-users:
+    description: >
+      Additional non-collaborator usernames to allow past
+      `openai/codex-action`'s actor gate (comma-separated). Use with care: the
+      caller must have an out-of-band gate (e.g. a maintainer-applied label)
+      before whitelisting a non-collaborator, since this lets that user
+      indirectly consume Codex API quota. Empty by default.
+    required: false
+    default: ''
+
+outputs:
+  triage-exists:
+    description: "true if Codex produced a non-empty triage output, false otherwise."
+    value: ${{ steps.read.outputs.triage_exists }}
+  triage-content:
+    description: Raw triage text (multiline). Empty when triage-exists is false.
+    value: ${{ steps.read.outputs.triage_content }}
+  triage-content-json:
+    description: JSON-escaped triage text suitable for direct embedding into a JSON payload.
+    value: ${{ steps.read.outputs.triage_content_json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run Codex
+      id: codex
+      continue-on-error: true
+      # Pinned to a commit SHA (Sonar S7670); keep in sync with codex-run. To
+      # upgrade: look up openai/codex-action tags, set the SHA the new tag
+      # resolves to, and update this comment.
+      uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1 # v1.8
+      with:
+        openai-api-key: ${{ inputs.openai-api-key }}
+        prompt-file: ${{ inputs.prompt-file }}
+        working-directory: ${{ inputs.working-directory }}
+        # Read-only sandbox: the agent analyzes, it cannot modify the tree.
+        # `drop-sudo` additionally drops sudo from the Codex subprocess — required
+        # because triage reads CI logs that may carry attacker-controlled content
+        # (fork-PR triage especially), so a prompt injection in the logs cannot
+        # escalate to running privileged commands and exfiltrating the API key.
+        sandbox: read-only
+        safety-strategy: drop-sudo
+        # Triage often runs on post-merge / scheduled events whose actor is a bot
+        # (github-merge-queue, github-actions[bot]); allow them past the action's
+        # collaborator gate. `allow-bots: true` covers github-actions[bot]. The
+        # merge-queue actor differs by event: `push` runs see
+        # `github-merge-queue[bot]` (allow-bot-users), but `schedule` runs see the
+        # bare `github-merge-queue`, which the action's `[bot]`-suffix check
+        # rejects and never looks up in allow-bot-users — so it goes in
+        # allow-users, comma-joined with any caller-supplied users.
+        allow-bots: true
+        allow-bot-users: github-merge-queue[bot]
+        allow-users: ${{ inputs.allow-users != '' && format('github-merge-queue,{0}', inputs.allow-users) || 'github-merge-queue' }}
+
+    - name: Read triage output
+      id: read
+      shell: bash
+      # Read codex's `final-message` step output rather than a workspace file:
+      # under `sandbox: read-only` the workspace is mounted read-only, so any
+      # `--output-last-message` write into it is silently dropped. `final-message`
+      # is populated from a temp file the action creates outside the workspace.
+      env:
+        TRIAGE_CODEX_OUTCOME: ${{ steps.codex.outcome }}
+        TRIAGE_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
+      run: |
+        if [ "$TRIAGE_CODEX_OUTCOME" != "success" ]; then
+          echo "triage_exists=false" >> "$GITHUB_OUTPUT"
+          echo "⚠️ Codex triage step did not succeed (outcome=${TRIAGE_CODEX_OUTCOME})"
+          exit 0
+        fi
+        if [ -z "$TRIAGE_FINAL_MESSAGE" ]; then
+          echo "triage_exists=false" >> "$GITHUB_OUTPUT"
+          echo "⚠️ Codex triage succeeded but produced no final-message output"
+          exit 0
+        fi
+        echo "triage_exists=true" >> "$GITHUB_OUTPUT"
+        {
+          echo "triage_content<<__EOF__"
+          printf '%s\n' "$TRIAGE_FINAL_MESSAGE"
+          echo "__EOF__"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "triage_content_json<<__EOF__"
+          printf '%s' "$TRIAGE_FINAL_MESSAGE" | jq -Rs .
+          echo "__EOF__"
+        } >> "$GITHUB_OUTPUT"
