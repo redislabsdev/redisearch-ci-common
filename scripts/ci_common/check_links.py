@@ -110,15 +110,21 @@ class LinkChecker:
         return links
 
     def _resolve_relative_path(self, url: str, file_path: Path) -> str:
-        """Resolve relative path against the markdown file's directory."""
-        # Remove any query parameters or anchors for file system resolution
-        clean_url = url.split('?')[0].split('#')[0]
+        """Resolve a relative link against the markdown file's directory.
 
-        # Resolve relative to the markdown file's directory
+        The `#fragment` is preserved (re-attached to the resolved path) so the
+        anchor can be validated later. A pure same-file anchor (`#section`)
+        resolves to the current file so its own headings are checked.
+        """
+        without_query = url.split('?', 1)[0]
+        clean_url, _, fragment = without_query.partition('#')
+
         file_dir = file_path.parent
-        resolved_path = (file_dir / clean_url).resolve()
+        # `#anchor` with no path -> the current file.
+        target = clean_url if clean_url else file_path.name
+        resolved_path = (file_dir / target).resolve()
 
-        return str(resolved_path)
+        return f"{resolved_path}#{fragment}" if fragment else str(resolved_path)
 
     def _should_exclude_url(self, url: str) -> bool:
         """Check if URL should be excluded from checking."""
@@ -148,22 +154,104 @@ class LinkChecker:
             return False, f"Error: {str(e)}"
 
     def _check_relative_link(self, file_path: str) -> Tuple[bool, str]:
-        """Check if a relative file or directory path exists."""
-        path = Path(file_path)
+        """Check that a relative file/dir exists; for `*.md#anchor` links, also
+        verify the anchor resolves to a heading or explicit anchor in the target."""
+        path_part, _, fragment = file_path.partition('#')
+        path = Path(path_part)
 
         if not path.exists():
             return False, "Path not found"
 
-        if path.is_file():
-            with self._lock:
-                self.checked_urls.add(file_path)
-            return True, "File exists"
-        elif path.is_dir():
+        if path.is_dir():
             with self._lock:
                 self.checked_urls.add(file_path)
             return True, "Directory exists"
-        else:
+
+        if not path.is_file():
             return False, "Path exists but is neither file nor directory"
+
+        # Anchor validation only for Markdown targets; other file types just
+        # need to exist.
+        if fragment and path.suffix.lower() in ('.md', '.markdown'):
+            if not self._anchor_in_markdown(path, fragment):
+                return False, f"Anchor '#{fragment}' not found in {path.name}"
+            with self._lock:
+                self.checked_urls.add(file_path)
+            return True, "File and anchor exist"
+
+        with self._lock:
+            self.checked_urls.add(file_path)
+        return True, "File exists"
+
+    # Line-number anchors (#L10, #L10-L20) are rendered client-side by the code
+    # viewer and never appear as heading ids — skip them rather than false-fail.
+    _LINE_ANCHOR_RE = re.compile(r'^L\d+(?:-L\d+)?$', re.IGNORECASE)
+
+    def _anchor_in_markdown(self, path: Path, fragment: str) -> bool:
+        """True if `fragment` matches a heading slug or an explicit anchor in the
+        target Markdown. Uses GitHub's heading-slug rules and also accepts
+        explicit `<a id/name=...>` and `{#custom-id}` anchors. Errs toward True
+        (skips validation) for line-number anchors or when the file can't be
+        read, and only ever *adds* candidate anchors, so it fails solely on a
+        genuinely-absent anchor."""
+        if self._LINE_ANCHOR_RE.match(fragment):
+            return True
+        try:
+            text = path.read_text(encoding='utf-8')
+        except Exception:
+            return True
+
+        target = fragment.lower()
+        anchors: Set[str] = set()
+        slug_counts: Dict[str, int] = {}
+        in_fence = False
+        prev = ''
+        for line in text.split('\n'):
+            stripped = line.strip()
+            if stripped.startswith('```') or stripped.startswith('~~~'):
+                in_fence = not in_fence
+                prev = ''
+                continue
+            if in_fence:
+                prev = stripped
+                continue
+
+            # Explicit custom id anywhere on the line: "## Heading {#custom-id}".
+            cid = re.search(r'\{#([\w-]+)\}', line)
+            if cid:
+                anchors.add(cid.group(1).lower())
+
+            # ATX heading ("## Title") or setext heading (prev line underlined
+            # by === / ---). Treating a stray underline as a heading only adds a
+            # spurious (harmless) anchor, never removes one.
+            title = None
+            atx = re.match(r'#{1,6}\s+(.*?)\s*#*\s*$', stripped)
+            if atx:
+                title = atx.group(1)
+            elif prev and re.match(r'^(=+|-+)$', stripped):
+                title = prev
+            if title is not None:
+                title = re.sub(r'\{#[\w-]+\}\s*$', '', title).strip()
+                slug = self._slugify(title)
+                if slug:
+                    n = slug_counts.get(slug, 0)
+                    anchors.add(slug if n == 0 else f"{slug}-{n}")
+                    slug_counts[slug] = n + 1
+            prev = stripped
+
+        for m in re.finditer(r'<a\s+[^>]*?(?:name|id)\s*=\s*["\']([^"\']+)["\']', text, re.IGNORECASE):
+            anchors.add(m.group(1).lower())
+
+        return target in anchors
+
+    @staticmethod
+    def _slugify(title: str) -> str:
+        """Approximate GitHub's heading-anchor slug: strip inline links/code,
+        lowercase, drop punctuation except hyphens, spaces -> hyphens."""
+        t = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', title)  # [text](url) -> text
+        t = t.replace('`', '').lower()
+        t = re.sub(r'[^\w\s-]', '', t)  # keep letters/digits/_, spaces, hyphens
+        return t.strip().replace(' ', '-')
 
     def _check_with_curl(self, url: str) -> Tuple[bool, str]:
         """Fallback to curl when requests fails."""
