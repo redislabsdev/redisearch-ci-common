@@ -1,0 +1,35 @@
+name: Slack notify
+description: >
+  Post a payload to a Slack incoming webhook / workflow webhook. Thin, generic
+  wrapper around slackapi/slack-github-action so every repo stops hand-rolling
+  its own "notify failure" step. The webhook is a secret supplied by the caller;
+  nothing repo-specific lives here.
+
+inputs:
+  webhook:
+    description: Slack webhook URL (pass a secret, never a literal).
+    required: true
+  payload:
+    description: JSON payload to send (a string; the caller renders the fields).
+    required: true
+  webhook-type:
+    description: >
+      slackapi webhook type — `incoming-webhook` for a classic Incoming Webhook,
+      or `webhook-trigger` for a Workflow Builder trigger.
+    required: false
+    default: incoming-webhook
+  errors:
+    description: Fail the step if Slack returns an error.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Send Slack notification
+      uses: slackapi/slack-github-action@v3
+      with:
+        webhook: ${{ inputs.webhook }}
+        webhook-type: ${{ inputs.webhook-type }}
+        errors: ${{ inputs.errors }}
+        payload: ${{ inputs.payload }}

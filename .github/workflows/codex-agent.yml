@@ -1,0 +1,147 @@
+name: Codex agent (reusable)
+
+# Job-level building block for label / comment callers (e.g. an "auto-resolve PR
+# conflicts" or "fix PR CI" workflow). It mints a scoped GitHub App token, checks
+# out the target repo/ref, runs an optional resolver step, then hands off to the
+# `codex-run` composite action with the standard security posture.
+#
+# Callers that need step-level control inside an existing job (interleaving Codex
+# between their own git steps) should use the `codex-run` composite action
+# directly instead of this whole-job workflow.
+#
+# This workflow is generic: it carries no product-, branch-, or prompt-specific
+# content. Callers supply their own prompt file and (optionally) a resolver
+# script via inputs.
+
+on:
+  workflow_call:
+    inputs:
+      prompt-file:
+        description: Path (in the checked-out target repo) to the agent's prompt.
+        required: true
+        type: string
+      app-id:
+        description: GitHub App id (typically passed as a repo/org variable).
+        required: true
+        type: string
+      # This workflow always operates on the CALLER repository at the ref that
+      # triggered the caller (the default checkout). Cross-repo or cross-ref
+      # flows should use the `codex-run` composite action directly, after their
+      # own `actions/checkout` — that keeps token-owner, `repositories:` scope,
+      # and GH_REPO consistent, which a target-repo input here could not.
+      ref:
+        description: "Ref to check out. Default: the caller's triggering ref."
+        required: false
+        type: string
+        default: ""
+      resolver:
+        description: >
+          Optional command run before Codex (e.g. a python resolver that writes
+          a context file and sets a `skip` output). Runs from the workspace root.
+        required: false
+        type: string
+        default: ""
+      fetch-depth:
+        description: Checkout fetch depth (0 = full history).
+        required: false
+        type: number
+        default: 1
+      runs-on:
+        description: Runner label.
+        required: false
+        type: string
+        default: ubuntu-latest
+      permission-contents:
+        description: App token contents permission (read | write).
+        required: false
+        type: string
+        default: read
+      permission-pull-requests:
+        description: App token pull-requests permission (read | write | none).
+        required: false
+        type: string
+        default: write
+      allow-bots:
+        description: Allow bot actors to trigger the agent.
+        required: false
+        type: boolean
+        default: false
+      allow-bot-users:
+        description: Comma-separated bot logins to trust when allow-bots is true.
+        required: false
+        type: string
+        default: ""
+      allow-users:
+        description: >
+          Comma-separated non-`[bot]` logins to allow past the actor gate. Needed
+          alongside allow-bot-users for actors that appear without the `[bot]`
+          suffix on some events (e.g. the bare `github-merge-queue` on schedule
+          runs). List such actors in both.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app-private-key:
+        description: Private key for the GitHub App whose id is `app-id`.
+        required: true
+      openai-api-key:
+        description: OpenAI API key for Codex.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  codex-agent:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
+    steps:
+      - name: 🔑 Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          # Scope the token to the caller repo (matches the OSS backport token
+          # pattern). Under workflow_call the github context is the caller's
+          # event, so github.event.repository.name is the caller repo.
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: ${{ inputs.permission-contents }}
+          permission-pull-requests: ${{ inputs.permission-pull-requests }}
+
+      - name: Checkout caller repo
+        uses: actions/checkout@v6
+        with:
+          # No `repository:` — defaults to the caller repo. (Passing an empty
+          # string would override that default and break the checkout.) `ref` is
+          # only set when the caller asked for a specific one; empty lets
+          # checkout use the caller's triggering ref.
+          ref: ${{ inputs.ref }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "redis-ci[bot]"
+          git config user.email "redis-ci[bot]@users.noreply.github.com"
+
+      - name: Run resolver
+        id: resolver
+        if: inputs.resolver != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Pin gh to the caller repo (matches GITHUB_REPOSITORY for workflow_call).
+          GH_REPO: ${{ github.repository }}
+        run: ${{ inputs.resolver }}
+
+      - name: Run Codex
+        if: steps.resolver.outputs.skip != 'true'
+        uses: redislabsdev/redisearch-ci-common/.github/actions/codex-run@main
+        with:
+          openai-api-key: ${{ secrets.openai-api-key }}
+          gh-token: ${{ steps.app-token.outputs.token }}
+          prompt-file: ${{ inputs.prompt-file }}
+          allow-bots: ${{ inputs.allow-bots }}
+          allow-bot-users: ${{ inputs.allow-bot-users }}
+          allow-users: ${{ inputs.allow-users }}

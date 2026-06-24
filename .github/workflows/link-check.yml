@@ -1,0 +1,90 @@
+name: Link check (reusable)
+
+# Validate links (and anchors) in a repo's Markdown. Reusable + self-contained:
+# the checker script is bundled here in `scripts/ci_common/check_links.py`, so
+# consuming repos don't each carry a copy. Callers add a thin caller that
+# `uses:` this one (typically `on: pull_request` for `**.md`).
+
+on:
+  workflow_call:
+    inputs:
+      timeout:
+        type: number
+        default: 15
+      max-workers:
+        type: number
+        default: 5
+      delay:
+        type: string
+        default: "0.2"
+      ci-common-ref:
+        description: >
+          Ref of redisearch-ci-common to fetch the checker script from. Set this
+          to the same ref you pinned this workflow's `uses:` to.
+        type: string
+        default: main
+      runs-on:
+        type: string
+        default: ubuntu-slim
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  link-check:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository under test
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Checkout ci-common (checker script)
+        uses: actions/checkout@v6
+        with:
+          repository: redislabsdev/redisearch-ci-common
+          ref: ${{ inputs.ci-common-ref }}
+          path: ci-common
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -r ci-common/scripts/ci_common/requirements-linkcheck.txt
+
+      - name: Check links in documentation
+        run: |
+          python ci-common/scripts/ci_common/check_links.py repo \
+            --timeout ${{ inputs.timeout }} \
+            --max-workers ${{ inputs.max-workers }} \
+            --delay ${{ inputs.delay }}
+
+      # (No artifact upload: the bundled check_links.py prints to stdout and
+      # never writes link-check-*.log, so an upload step would always be empty.)
+      # Gate on PR context (not just failure()): as a reusable workflow this can
+      # be called from non-PR events, where context.issue.number is unset and
+      # createComment would error and mask the real link failure.
+      - name: Comment on PR
+        if: failure() && github.event.pull_request
+        uses: actions/github-script@v8
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🔗 Link Check Failed
+
+              Some links in the modified Markdown files are broken or unreachable.
+
+              Please check the workflow logs for details and fix the broken links.
+
+              **Note:** This check validates both URL accessibility and anchor existence.`
+            });
