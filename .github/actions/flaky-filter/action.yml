@@ -106,10 +106,19 @@ runs:
         all_quarantined=false
         if [ -s "$marks" ]; then
           if python3 "$cli" filter --tests "$TESTS" --marks "$marks" --output "$OUTPUT"; then
-            # Marks present + filter ok + had tests + nothing left ⇒ all quarantined.
-            if [ -s "$TESTS" ] && [ ! -s "$OUTPUT" ]; then
-              all_quarantined=true
-              echo "::notice::All enumerated tests are quarantined for this shard."
+            if [ ! -s "$OUTPUT" ]; then
+              # Output empty: distinguish "every valid test was quarantined" from
+              # "the input had no valid test ids at all". Re-filter with no marks
+              # (same code path, so the same id-validation applies) to get the set
+              # of tests that *would* run; only call it all-quarantined if that
+              # baseline was non-empty.
+              empty_marks="$RUNNER_TEMP/flaky_empty_marks.txt"; : > "$empty_marks"
+              baseline="$RUNNER_TEMP/flaky_baseline.txt"
+              python3 "$cli" filter --tests "$TESTS" --marks "$empty_marks" --output "$baseline" || : > "$baseline"
+              if [ -s "$baseline" ]; then
+                all_quarantined=true
+                echo "::notice::All enumerated tests are quarantined for this shard."
+              fi
             fi
           else
             : > "$OUTPUT"   # filter error ⇒ fail-open (full suite)
