@@ -79,7 +79,7 @@ class LinkChecker:
                     elif pattern == patterns[1]:  # <url> format
                         url = match.group(1)
                     else:  # bare URL format
-                        url = match.group(1)
+                        url = self._trim_bare_url(match.group(1))
 
                     # Skip mailto links
                     if url.startswith('mailto:'):
@@ -108,6 +108,17 @@ class LinkChecker:
                     links.append((resolved_url, line_num, link_type))
 
         return links
+
+    @staticmethod
+    def _trim_bare_url(url: str) -> str:
+        r"""Strip trailing prose punctuation a bare-URL regex (\S+) sweeps up,
+        e.g. 'https://x.com).' -> 'https://x.com'. A trailing ')' is kept when it
+        balances a '(' inside the URL (e.g. a wiki link like '..._(section)')."""
+        while url and url[-1] in ".,;:!?'\")]}>":
+            if url[-1] == ')' and url.count('(') >= url.count(')'):
+                break
+            url = url[:-1]
+        return url
 
     def _resolve_relative_path(self, url: str, file_path: Path) -> str:
         """Resolve a relative link against the markdown file's directory.

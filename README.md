@@ -110,6 +110,15 @@ Tags are moved deliberately after the change has been validated in a consumer.
 (The internal `codex-agent` → `codex-run` reference uses `@main` within this repo
 and is updated together with each release.)
 
+## CI
+
+This repo lints its own building blocks on every PR
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): `actionlint` (workflow
+syntax, expressions, shellcheck of `run:` steps), a strict YAML check that
+rejects duplicate mapping keys across both workflows and composite actions, and
+`compileall` over the Python helpers — so a change here can't silently break a
+consumed unit.
+
 ## License
 
 Made available under your choice of the Redis Source Available License 2.0
