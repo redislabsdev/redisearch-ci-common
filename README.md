@@ -47,7 +47,7 @@ RLTest suites can quarantine known-flaky tests consistently.
 | `flaky-mark` reusable workflow | [`.github/workflows/flaky-mark.yml`](.github/workflows/flaky-mark.yml) | Add a flaky mark (test id, reason, Jira key, expiry). Add a thin `on: workflow_dispatch` caller. |
 | `flaky-unmark` reusable workflow | [`.github/workflows/flaky-unmark.yml`](.github/workflows/flaky-unmark.yml) | Remove a flaky mark. |
 | `flaky_db.py` CLI | [`scripts/ci_common/flaky_db.py`](scripts/ci_common/flaky_db.py) | `mark`/`unmark`/`fetch`/`filter`/`record`. No-op when `REDIS_URL` is unset (keeps fork-PR CI green). |
-| `flaky-filter` composite action | [`.github/actions/flaky-filter`](.github/actions/flaky-filter/action.yml) | Fetch marks and filter them out of a caller-provided test list → filtered TESTFILE. Caller enumerates its own tests (product-specific); empty output = run full suite. |
+| `flaky-filter` composite action | [`.github/actions/flaky-filter`](.github/actions/flaky-filter/action.yml) | Fetch marks and filter them out of a caller-provided test list → filtered TESTFILE. Caller enumerates its own tests (product-specific); empty output = run full suite. Also emits `all-quarantined` so a caller can skip a fully-quarantined shard. |
 | `flaky-record-results` composite action | [`.github/actions/flaky-record-results`](.github/actions/flaky-record-results/action.yml) | Record an RLTest run's failed/passed test ids to the DB from inside a test job (`if: always()`). Never fails the job. |
 
 > Unlike the units above (which are test-framework agnostic), the flaky tooling

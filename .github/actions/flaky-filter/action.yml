@@ -10,8 +10,12 @@ description: |
 
   Fail-open: emits an empty `testfile` when there are no active marks, when the
   DB is unset/unreachable, or on any error — callers treat empty as "run the
-  full suite". Container-safe: the DB CLI is fetched into the (mounted)
-  workspace via checkout, since github.action_path is not mounted in containers.
+  full suite". When marks exist and they filter out *every* enumerated test, the
+  `all-quarantined` output is `true` so the caller can choose to skip the shard
+  entirely (an empty TESTFILE alone can't express "run nothing").
+
+  Container-safe: the DB CLI is fetched into the (mounted) workspace via checkout,
+  since github.action_path is not mounted in container jobs.
 
 inputs:
   redis-url:
@@ -36,6 +40,12 @@ outputs:
   testfile:
     description: "Filtered TESTFILE path; empty if no marks or any step failed."
     value: ${{ steps.filter.outputs.testfile }}
+  all-quarantined:
+    description: >
+      'true' when active marks filtered out every enumerated test (the filtered
+      set is empty). Callers can skip the test step entirely in that case.
+      'false' otherwise (no marks, partial filter, or any error).
+    value: ${{ steps.filter.outputs.all-quarantined }}
 
 runs:
   using: composite
@@ -93,8 +103,17 @@ runs:
         python3 "$cli" fetch --output-json "$RUNNER_TEMP/flaky_marks.json" --output-list "$marks" || \
           echo "::warning::flaky fetch failed; running the full suite"
         : > "$OUTPUT"
+        all_quarantined=false
         if [ -s "$marks" ]; then
-          python3 "$cli" filter --tests "$TESTS" --marks "$marks" --output "$OUTPUT" || : > "$OUTPUT"
+          if python3 "$cli" filter --tests "$TESTS" --marks "$marks" --output "$OUTPUT"; then
+            # Marks present + filter ok + had tests + nothing left ⇒ all quarantined.
+            if [ -s "$TESTS" ] && [ ! -s "$OUTPUT" ]; then
+              all_quarantined=true
+              echo "::notice::All enumerated tests are quarantined for this shard."
+            fi
+          else
+            : > "$OUTPUT"   # filter error ⇒ fail-open (full suite)
+          fi
         else
           echo "No active flaky marks — running the full suite"
         fi
@@ -103,3 +122,4 @@ runs:
         else
           echo "testfile=" >> "$GITHUB_OUTPUT"
         fi
+        echo "all-quarantined=$all_quarantined" >> "$GITHUB_OUTPUT"
