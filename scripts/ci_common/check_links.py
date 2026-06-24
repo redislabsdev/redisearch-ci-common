@@ -41,7 +41,7 @@ class LinkChecker:
         self.checked_urls: Set[str] = set()
         # Set by check_all_files to the resolved scan root; relative links that
         # resolve outside it are rejected rather than probed/read.
-        self.root: Path = None
+        self.root = None
         # Guards checked_urls across the ThreadPoolExecutor workers in
         # check_all_files. The shared requests.Session is only used for
         # concurrent GETs after its headers are set above (thread-safe), so it
@@ -68,14 +68,29 @@ class LinkChecker:
 
         # Regex patterns for different link types
         patterns = [
-            r'\[([^\]]*)\]\(([^)]+)\)',  # [text](url)
+            # [text](dest "optional title"): allow balanced single-level parens
+            # in the destination (e.g. wiki links like Foo_(bar)) and drop an
+            # optional quoted title, so neither is mis-captured as part of the URL.
+            r'\[([^\]]*)\]\(\s*([^()\s]*(?:\([^()]*\)[^()\s]*)*)(?:\s+(?:"[^"]*"|\'[^\']*\'))?\s*\)',
             r'<(https?://[^>]+)>',       # <url> - only if starts with http
             r'(?:^|\s)(https?://\S+)',   # bare URLs
         ]
 
+        in_fence = False
         for line_num, line in enumerate(lines, 1):
+            stripped = line.strip()
+            # Skip fenced code blocks (``` / ~~~): example/placeholder links in
+            # code samples aren't real links. Mirrors _anchor_in_markdown.
+            if stripped.startswith('```') or stripped.startswith('~~~'):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            # Inline code spans don't render as links either, so drop them before
+            # extraction (e.g. a `https://example.com` shown as literal code).
+            scan_line = re.sub(r'`[^`]*`', '', line)
             for pattern in patterns:
-                matches = re.finditer(pattern, line)
+                matches = re.finditer(pattern, scan_line)
                 for match in matches:
                     if pattern == patterns[0]:  # [text](url) format
                         url = match.group(2)
