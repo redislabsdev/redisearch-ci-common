@@ -93,10 +93,9 @@ jobs:
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.app-private-key }}
-          owner: ${{ github.repository_owner }}
-          # Scope the token to the caller repo only. Without this it covers every
-          # repo the App can access in the org.
-          repositories: ${{ github.event.repository.name }}
+          # Omit `owner`/`repositories`: create-github-app-token then scopes the
+          # token to THIS (caller) repo only — the least-privilege default —
+          # without depending on the shape of the caller's event payload.
           permission-contents: ${{ inputs.permission-contents }}
           permission-pull-requests: ${{ inputs.permission-pull-requests }}
 
