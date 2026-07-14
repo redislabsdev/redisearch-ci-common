@@ -78,7 +78,16 @@ runs:
         path: .redisearch-ci-common
         persist-credentials: false
 
+    - name: Detect libc (musl vs glibc)
+      # Sets steps.libc.outputs.musl. actions/setup-python is glibc-only and
+      # pollutes $GITHUB_ENV on musl (see detect_libc.sh), so we skip it there.
+      id: libc
+      shell: bash {0}
+      run: bash "$GITHUB_WORKSPACE/.redisearch-ci-common/scripts/ci_common/detect_libc.sh"
+
     - name: Set up Python
+      # Skipped on musl (see "Detect libc"): the caller supplies a musl python3.
+      if: steps.libc.outputs.musl != 'true'
       uses: actions/setup-python@v6
       with:
         python-version: "3.x"
