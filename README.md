@@ -31,6 +31,7 @@ plumbing.
 
 | Unit | Path | Purpose |
 |---|---|---|
+| `checkout-isolated` composite action | [`.github/actions/checkout-isolated`](.github/actions/checkout-isolated/action.yml) | A job's **first** step: bypass a persistent self-hosted runner's leftover global/system git config and drop a reused `.git`, then check out. Has to be consumed from here — a local `./` copy is resolved from the workspace, which is empty before the checkout it performs. |
 | `slack-notify` composite action | [`.github/actions/slack-notify`](.github/actions/slack-notify/action.yml) | Post a payload to a Slack webhook — replaces every repo's hand-rolled "notify failure" step. Webhook is a caller secret. |
 | `pr-size-label` reusable workflow | [`.github/workflows/pr-size-label.yml`](.github/workflows/pr-size-label.yml) | Label a PR by diff size. Add a thin `on: pull_request` caller. |
 | `spellcheck` reusable workflow | [`.github/workflows/spellcheck.yml`](.github/workflows/spellcheck.yml) | codespell over a PR's changed files. The repo supplies its own `.codespell/` config. |
