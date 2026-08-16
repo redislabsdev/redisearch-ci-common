@@ -1,0 +1,56 @@
+name: 'Checkout with an isolated git config'
+description: |
+  Neutralise a persistent self-hosted runner's leftover git state, then check the repo out.
+
+  On a self-hosted runner both the workspace and the runner user's global git config
+  outlive the job that created them. A config key that maps an event or a path to an
+  executable (hooks, fsmonitor, attributesFile filters, templateDir, url.insteadOf,
+  credential.helper, sshCommand, ...) would be honoured by the checkout below, and a
+  reused `.git` carries the same state locally. This points git at a clean,
+  workflow-owned global config for every later step in the job, ignores system config,
+  and keeps only safe.directory so a non-runner-owned tree still checks out.
+
+  Use it as a job's FIRST step — hardening a checkout is worth nothing after that
+  checkout has run. This is also why it cannot live in the consuming repo as a local
+  (`./`) action: GitHub resolves those from the workspace, which is empty until the
+  checkout this action performs.
+
+inputs:
+  ref:
+    description: "Ref to check out. Defaults to the ref the workflow runs from."
+    required: false
+    default: ""
+  fetch-depth:
+    description: "Commits to fetch. 0 for the full history."
+    required: false
+    default: "1"
+  persist-credentials:
+    description: >
+      Leave the token in .git/config as an extraheader. Defaults off, unlike
+      actions/checkout: a job that pushes should mint a scoped token and pass it
+      explicitly rather than inherit whatever checked the repo out.
+    required: false
+    default: "false"
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Isolate git config + drop reused checkout (self-hosted safety)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cfg="${RUNNER_TEMP}/ci-gitconfig"
+        : > "${cfg}"
+        GIT_CONFIG_GLOBAL="${cfg}" GIT_CONFIG_NOSYSTEM=1 git config --global --add safe.directory '*'
+        {
+          echo "GIT_CONFIG_GLOBAL=${cfg}"
+          echo "GIT_CONFIG_SYSTEM=/dev/null"
+          echo "GIT_CONFIG_NOSYSTEM=1"
+        } >> "$GITHUB_ENV"
+        rm -rf .git
+
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        persist-credentials: ${{ inputs.persist-credentials }}
