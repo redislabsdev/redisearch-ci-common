@@ -45,7 +45,12 @@ inputs:
       depending on the event — e.g. the merge queue is `github-merge-queue[bot]`
       on push/merge events (allow-bot-users) but the bare `github-merge-queue`
       on schedule events, which the action's `[bot]`-suffix check only matches
-      via allow-users. List such actors in both.
+      via allow-users. List such actors in both. Leave unset on a `schedule`
+      trigger: the actor gate exists to stop an untrusted human/bot actor from
+      reaching this step, and a `schedule` event has no such actor (nobody
+      chose to fire it), so this action trusts github.actor automatically in
+      that case — whatever bot name GitHub happens to attribute it to. Set
+      this explicitly only to override that default, or for other event types.
     required: false
     default: ""
 
@@ -75,4 +80,10 @@ runs:
         codex-args: ${{ inputs.codex-args }}
         allow-bots: ${{ inputs.allow-bots }}
         allow-bot-users: ${{ inputs.allow-bot-users }}
-        allow-users: ${{ inputs.allow-users }}
+        # A `schedule` event has no attacker-reachable actor at all — GitHub
+        # attributes it to whatever bot ran last, which the actor gate would
+        # otherwise reject as "not a collaborator". Trust it automatically
+        # instead of every schedule-triggered caller having to allowlist that
+        # bot name by hand (and re-discover it whenever GitHub changes it).
+        # An explicit allow-users input still wins.
+        allow-users: ${{ inputs['allow-users'] != '' && inputs['allow-users'] || (github.event_name == 'schedule' && github.actor || '') }}
