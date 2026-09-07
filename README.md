@@ -135,8 +135,10 @@ merged change before a version is validated and published. A consumer may
 instead use an exact commit SHA when required by its security tooling. Such a
 consumer needs an explicit ref bump to receive updates.
 
-`codex-run` is first-party, while the `openai/codex-action` it invokes is an
-external dependency and is pinned to a full commit SHA inside `codex-run`.
+Actions owned outside the Redis GitHub organizations are third-party
+dependencies. For example, `codex-run@v1` is first-party and can use the
+floating major tag, while the `openai/codex-action` that it invokes is
+third-party and is pinned to a full commit SHA inside `codex-run`.
 (The internal `codex-agent` → `codex-run` reference uses `@main` within this
 repository and is updated together with each release.)
 
