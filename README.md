@@ -109,13 +109,38 @@ jobs:
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-## Versioning
+## Versioning and dependency trust
 
-Consumers should pin to an immutable ref — a tag (e.g. `@v1`) or a commit SHA —
-rather than `@main`, so a change here can't silently alter every consumer's CI.
-Tags are moved deliberately after the change has been validated in a consumer.
-(The internal `codex-agent` → `codex-run` reference uses `@main` within this repo
-and is updated together with each release.)
+RediSearch and RSE consume these shared workflows and actions through thin
+callers, normally using the floating major tag `@v1`:
+
+```yaml
+uses: redislabsdev/redisearch-ci-common/...@v1
+```
+
+`redisearch-ci-common` is first-party code owned by Redis. Its `v1` tag is a
+ref pin, but it is not immutable:
+
+- A backward-compatible release creates an immutable `v1.x.y` tag and moves
+  `v1` after validation. Consumers and release branches already using `@v1`
+  receive the update on their next workflow run, without dependency-bump or
+  CI-backport PRs.
+- A breaking release creates a new major tag such as `v2`. Updating consumers
+  requires a PR, which Renovate or Dependabot can open where configured.
+- A branch or commit ref may be used temporarily for end-to-end testing, but
+  should be replaced with the supported major tag before merging.
+
+Do not consume this repository at `@main`; that would expose consumers to every
+merged change before a version is validated and published. A consumer may
+instead use an exact commit SHA when required by its security tooling. Such a
+consumer needs an explicit ref bump to receive updates.
+
+Actions owned outside the Redis GitHub organizations are third-party
+dependencies. For example, `codex-run@v1` is first-party and can use the
+floating major tag, while the `openai/codex-action` that it invokes is
+third-party and is pinned to a full commit SHA inside `codex-run`.
+(The internal `codex-agent` → `codex-run` reference uses `@main` within this
+repository and is updated together with each release.)
 
 ## CI
 
