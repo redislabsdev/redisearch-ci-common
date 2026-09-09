@@ -28,6 +28,10 @@ on:
         type: string
         required: false
         default: cache
+      ci-common-ref:
+        description: Ref of redisearch-ci-common to fetch the prune script from.
+        type: string
+        default: v1
       runs-on:
         type: string
         default: ubuntu-latest
@@ -39,69 +43,27 @@ jobs:
     permissions:
       contents: read
       actions: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-      KEY_PREFIX: ${{ inputs.key_prefix }}
-      KEEP_COUNT: ${{ inputs.keep_count }}
-      MAX_DELETE_PER_RUN: ${{ inputs.max_delete_per_run }}
-      LABEL: ${{ inputs.label }}
     steps:
+      - name: Checkout ci-common (prune script)
+        uses: actions/checkout@v6
+        with:
+          repository: redislabsdev/redisearch-ci-common
+          ref: ${{ inputs.ci-common-ref }}
+
       - name: Prune caches
         id: prune
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tmp="$(mktemp)"
-          trap 'rm -f "$tmp"' EXIT
-
-          gh cache list \
-            --repo "$REPO" \
-            --key "$KEY_PREFIX" \
-            --limit 20000 \
-            --sort last_accessed_at \
-            --order asc \
-            --json id,sizeInBytes > "$tmp"
-
-          total_count="$(jq 'length' "$tmp")"
-          total_size_bytes="$(jq '[.[].sizeInBytes] | add // 0' "$tmp")"
-          delete_count=0
-          delete_size_bytes=0
-          deleted_count=0
-          deleted_size_bytes=0
-          failed_count=0
-          failed_size_bytes=0
-
-          if [ "$total_count" -le "$KEEP_COUNT" ]; then
-            echo "$LABEL cache count ($total_count) is within keep threshold ($KEEP_COUNT)"
-          else
-            delete_count=$((total_count - KEEP_COUNT))
-            if [ "$delete_count" -gt "$MAX_DELETE_PER_RUN" ]; then
-              delete_count="$MAX_DELETE_PER_RUN"
-            fi
-
-            delete_size_bytes="$(jq --argjson n "$delete_count" '[.[0:$n][].sizeInBytes] | add // 0' "$tmp")"
-            echo "Deleting $delete_count oldest $LABEL caches (total=$total_count, keep=$KEEP_COUNT, max_per_run=$MAX_DELETE_PER_RUN)"
-
-            while read -r cache_id cache_size_bytes; do
-              if gh cache delete "$cache_id" --repo "$REPO"; then
-                deleted_count=$((deleted_count + 1))
-                deleted_size_bytes=$((deleted_size_bytes + cache_size_bytes))
-              else
-                failed_count=$((failed_count + 1))
-                failed_size_bytes=$((failed_size_bytes + cache_size_bytes))
-                echo "Failed to delete $LABEL cache id=$cache_id (continuing)"
-              fi
-            done < <(jq -r --argjson n "$delete_count" '.[0:$n][] | "\(.id) \(.sizeInBytes)"' "$tmp")
-          fi
-
-          for name in total_count total_size_bytes delete_count delete_size_bytes deleted_count deleted_size_bytes failed_count failed_size_bytes; do
-            echo "$name=${!name}" >> "$GITHUB_OUTPUT"
-          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY_PREFIX: ${{ inputs.key_prefix }}
+          KEEP_COUNT: ${{ inputs.keep_count }}
+          MAX_DELETE_PER_RUN: ${{ inputs.max_delete_per_run }}
+          LABEL: ${{ inputs.label }}
+        run: scripts/ci_common/prune-actions-cache.sh
 
       - name: Summarize cache cleanup
         env:
+          LABEL: ${{ inputs.label }}
           TOTAL_COUNT: ${{ steps.prune.outputs.total_count }}
           TOTAL_SIZE_BYTES: ${{ steps.prune.outputs.total_size_bytes }}
           DELETE_COUNT: ${{ steps.prune.outputs.delete_count }}
