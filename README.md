@@ -37,6 +37,7 @@ plumbing.
 | `spellcheck` reusable workflow | [`.github/workflows/spellcheck.yml`](.github/workflows/spellcheck.yml) | codespell over a PR's changed files. The repo supplies its own `.codespell/` config. |
 | `link-check` reusable workflow | [`.github/workflows/link-check.yml`](.github/workflows/link-check.yml) | Validate Markdown links/anchors. Self-contained — bundles `scripts/ci_common/check_links.py`. |
 | `stale` reusable workflow | [`.github/workflows/stale.yml`](.github/workflows/stale.yml) | Mark/close stale issues & PRs (actions/stale). Opt-in — for repos that track work in GitHub issues. |
+| `cache-maintenance` reusable workflow | [`.github/workflows/cache-maintenance.yml`](.github/workflows/cache-maintenance.yml) | Prune the oldest GitHub Actions cache entries for a key prefix, keeping the newest N. Add a thin `on: schedule` caller per cache family you want pruned. |
 
 ### Flaky-test DB
 

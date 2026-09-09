@@ -1,0 +1,128 @@
+name: Cache maintenance (reusable)
+
+# Prune the oldest GitHub Actions cache entries for a key prefix, keeping the
+# newest N. Actions cache eviction is LRU-ish and unpredictable under pressure,
+# so a long-lived cache family (e.g. a benchmark baseline consulted by nightly
+# runs) can be evicted before it's next needed; pruning proactively keeps
+# enough headroom. Reusable: the consuming repo adds a thin `on: schedule` (and
+# usually `workflow_dispatch`) caller — cadence and which key families to prune
+# are policy decisions that stay with the caller.
+
+on:
+  workflow_call:
+    inputs:
+      key_prefix:
+        description: 'Cache key prefix to prune (e.g. benchmark-baseline- or sccache/)'
+        type: string
+        required: true
+      keep_count:
+        description: 'Number of newest matching caches to keep'
+        type: string
+        required: true
+      max_delete_per_run:
+        description: 'Maximum number of caches to delete in one run'
+        type: string
+        required: true
+      label:
+        description: 'Human-readable family name for logs and the summary table'
+        type: string
+        required: false
+        default: cache
+      runs-on:
+        type: string
+        default: ubuntu-latest
+
+jobs:
+  prune:
+    name: Prune ${{ inputs.label }} caches
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      KEY_PREFIX: ${{ inputs.key_prefix }}
+      KEEP_COUNT: ${{ inputs.keep_count }}
+      MAX_DELETE_PER_RUN: ${{ inputs.max_delete_per_run }}
+      LABEL: ${{ inputs.label }}
+    steps:
+      - name: Prune caches
+        id: prune
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp="$(mktemp)"
+          trap 'rm -f "$tmp"' EXIT
+
+          gh cache list \
+            --repo "$REPO" \
+            --key "$KEY_PREFIX" \
+            --limit 20000 \
+            --sort last_accessed_at \
+            --order asc \
+            --json id,sizeInBytes > "$tmp"
+
+          total_count="$(jq 'length' "$tmp")"
+          total_size_bytes="$(jq '[.[].sizeInBytes] | add // 0' "$tmp")"
+          delete_count=0
+          delete_size_bytes=0
+          deleted_count=0
+          deleted_size_bytes=0
+          failed_count=0
+          failed_size_bytes=0
+
+          if [ "$total_count" -le "$KEEP_COUNT" ]; then
+            echo "$LABEL cache count ($total_count) is within keep threshold ($KEEP_COUNT)"
+          else
+            delete_count=$((total_count - KEEP_COUNT))
+            if [ "$delete_count" -gt "$MAX_DELETE_PER_RUN" ]; then
+              delete_count="$MAX_DELETE_PER_RUN"
+            fi
+
+            delete_size_bytes="$(jq --argjson n "$delete_count" '[.[0:$n][].sizeInBytes] | add // 0' "$tmp")"
+            echo "Deleting $delete_count oldest $LABEL caches (total=$total_count, keep=$KEEP_COUNT, max_per_run=$MAX_DELETE_PER_RUN)"
+
+            while read -r cache_id cache_size_bytes; do
+              if gh cache delete "$cache_id" --repo "$REPO"; then
+                deleted_count=$((deleted_count + 1))
+                deleted_size_bytes=$((deleted_size_bytes + cache_size_bytes))
+              else
+                failed_count=$((failed_count + 1))
+                failed_size_bytes=$((failed_size_bytes + cache_size_bytes))
+                echo "Failed to delete $LABEL cache id=$cache_id (continuing)"
+              fi
+            done < <(jq -r --argjson n "$delete_count" '.[0:$n][] | "\(.id) \(.sizeInBytes)"' "$tmp")
+          fi
+
+          for name in total_count total_size_bytes delete_count delete_size_bytes deleted_count deleted_size_bytes failed_count failed_size_bytes; do
+            echo "$name=${!name}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Summarize cache cleanup
+        env:
+          TOTAL_COUNT: ${{ steps.prune.outputs.total_count }}
+          TOTAL_SIZE_BYTES: ${{ steps.prune.outputs.total_size_bytes }}
+          DELETE_COUNT: ${{ steps.prune.outputs.delete_count }}
+          DELETE_SIZE_BYTES: ${{ steps.prune.outputs.delete_size_bytes }}
+          DELETED_COUNT: ${{ steps.prune.outputs.deleted_count }}
+          DELETED_SIZE_BYTES: ${{ steps.prune.outputs.deleted_size_bytes }}
+          FAILED_COUNT: ${{ steps.prune.outputs.failed_count }}
+          FAILED_SIZE_BYTES: ${{ steps.prune.outputs.failed_size_bytes }}
+        run: |
+          bytes_to_mib() {
+            awk "BEGIN { printf \"%.2f\", ($1 / 1024 / 1024) }"
+          }
+          {
+            echo "## Cache Cleanup Summary"
+            echo ""
+            echo "| Family | Total Found | Selected For Deletion | Deleted | Failed |"
+            echo "| --- | --- | --- | --- | --- |"
+            printf "| %s | %s (%.2f MiB) | %s (%.2f MiB) | %s (%.2f MiB) | %s (%.2f MiB) |\n" \
+              "$LABEL" \
+              "$TOTAL_COUNT" "$(bytes_to_mib "$TOTAL_SIZE_BYTES")" \
+              "$DELETE_COUNT" "$(bytes_to_mib "$DELETE_SIZE_BYTES")" \
+              "$DELETED_COUNT" "$(bytes_to_mib "$DELETED_SIZE_BYTES")" \
+              "$FAILED_COUNT" "$(bytes_to_mib "$FAILED_SIZE_BYTES")"
+          } >> "$GITHUB_STEP_SUMMARY"
