@@ -83,9 +83,16 @@ runs:
       shell: bash {0}
       run: bash "$GITHUB_WORKSPACE/.redisearch-ci-common/scripts/ci_common/detect_libc.sh"
 
+    - name: Detect usable ambient Python
+      # Login shell so it sees the same python3 as the steps below.
+      id: python
+      shell: bash -l {0}
+      run: bash "$GITHUB_WORKSPACE/.redisearch-ci-common/scripts/ci_common/detect_python.sh"
+
     - name: Set up Python
-      # Skipped on musl (see "Detect libc"): the caller supplies a musl python3.
-      if: steps.libc.outputs.musl != 'true'
+      # Fallback only — skipped on musl and when the caller's venv python3
+      # can run the CLI (see detect_python.sh).
+      if: steps.libc.outputs.musl != 'true' && steps.python.outputs.usable != 'true'
       uses: actions/setup-python@v6
       with:
         python-version: "3.x"
