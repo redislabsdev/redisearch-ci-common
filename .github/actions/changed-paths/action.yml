@@ -25,7 +25,8 @@ description: |
 
   Globs are matched with git `:(glob)` pathspecs, built the way changed-files
   builds its micromatch (`dot: true`, `noext: true`) list: a trailing `/` becomes
-  `/**`, a leading `!` excludes. The differences from micromatch are bridged:
+  `/**`, a leading `!` excludes, a leading `./` is dropped. The differences from
+  micromatch are bridged:
   a wildcard-free pattern matches only that exact path, and `X/**` also matches
   `X` unless the last segment of `X` contains a `*` other than `**`. Patterns
   git can't express the same way make every moved submodule count as matching:
@@ -99,16 +100,17 @@ runs:
         tmp=$(mktemp -d "${RUNNER_TEMP:-/tmp}/changed-paths.XXXXXX")
         trap 'rm -rf "$tmp"' EXIT
 
+        # Path bytes are untrusted: a newline would forge outputs or workflow commands.
+        oneline() { printf '%s\n' "${1//[$'\n\r']/?}"; }
         finish() {
           local changed=false
           if [ "$ANY_MODIFIED" = true ] || [ "$1" = true ]; then changed=true; fi
-          echo "changed=$changed submodules=$submodules"
-          # Path bytes are untrusted: a newline would forge further outputs.
-          { echo "submodules=${submodules//[$'\n\r']/?}"; echo "changed=$changed"; } >> "$GITHUB_OUTPUT"
+          oneline "changed=$changed submodules=$submodules"
+          { oneline "submodules=$submodules"; echo "changed=$changed"; } >> "$GITHUB_OUTPUT"
           exit 0
         }
         fail_closed() {
-          echo "::warning::$1; treating moved submodules as changed"
+          oneline "::warning::$1; treating moved submodules as changed"
           finish true
         }
         # Separate from any filter, so a git failure can't read as "no match".
@@ -162,12 +164,14 @@ runs:
           finish false
         fi
         echo "Submodule pointers moved between $base and $head:"
-        printf '  %s\n' "${!moved[@]}"
+        for path in "${!moved[@]}"; do oneline "  $path"; done
 
         specs=()
         unsupported=()
         add_spec() {
           local magic=$1 p=$2 prefix last
+          # picomatch drops a leading ./; git would too, but not once it is rewritten below.
+          while [[ $p == ./* ]]; do p=${p#./}; done
           case "$p" in
             *[{}\(\)\|\\]* | *'[!'* | '!'*) unsupported+=("$p"); return ;;
           esac
@@ -213,7 +217,7 @@ runs:
           submodules="${!moved[*]}"
           fail_closed "Glob(s) without a git pathspec equivalent: ${unsupported[*]}"
         fi
-        git_diff "$tmp/names" --name-only -z "$base" "$head" -- "${specs[@]}"
+        git_diff "$tmp/names" --name-only -z "$base" "$head" -- ${specs[@]+"${specs[@]}"}
         matched=()
         while IFS= read -r -d '' path; do
           if [ -n "${moved[$path]+x}" ]; then matched+=("$path"); fi
