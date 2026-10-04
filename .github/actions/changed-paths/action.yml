@@ -1,0 +1,230 @@
+name: 'Changed paths (submodule-aware)'
+description: |
+  Did anything matching `files` / `files_ignore` change? A drop-in for
+  tj-actions/changed-files' `any_modified` that also counts submodule pointer moves.
+
+  changed-files lists the superproject's changes with
+  `git diff --ignore-submodules=all` (`getAllChangedFiles` in its src/utils.ts) and
+  only sees a submodule through a diff inside the submodule. Without the submodule
+  checked out with history for both commits that diff fails with a warning and the
+  path is dropped, so a submodule-only bump reads as "nothing changed". This action
+  runs changed-files, then finds the gitlinks (mode 160000) that changed in the
+  superproject itself and matches them against the same globs.
+
+  The caller must check out with `fetch-depth: 0`, as changed-files requires, and
+  the job needs bash 4+ (a bare Alpine container has none).
+
+  Compare range: `pull_request` merge-base(base, head)..head; `push` before..sha;
+  `merge_group` base_sha..head_sha. `base` / `head` override the event's values.
+
+  Fails closed, unlike the best-effort units in this repo: the safe failure for a
+  "skip CI?" gate is running CI. `changed=true` with a warning results from any
+  other event without both overrides (`pull_request_target`, `workflow_dispatch`,
+  `schedule`, ...), a forced push (changed-files then compares HEAD^..HEAD), an
+  all-zero or unresolvable SHA (e.g. a new branch's first push), or a git error.
+
+  Globs are matched with git `:(glob)` pathspecs, built the way changed-files
+  builds its micromatch (`dot: true`, `noext: true`) list: a trailing `/` becomes
+  `/**`, a leading `!` excludes, a leading `./` is dropped. The differences from
+  micromatch are bridged:
+  a wildcard-free pattern matches only that exact path, and `X/**` also matches
+  `X` unless the last segment of `X` contains a `*` other than `**`. Patterns
+  git can't express the same way make every moved submodule count as matching:
+  braces, parentheses, `|`, `\`, `[!...]`, `!!`, a wildcard-free pattern with
+  no ASCII letter, digit, `.` or `_`, and a positive `files` pattern after a
+  `!` one (micromatch lets it re-include, git can't).
+
+inputs:
+  files:
+    description: "Newline-separated globs to include, passed to changed-files unchanged."
+    required: false
+    default: ""
+  files_ignore:
+    description: "Newline-separated globs to exclude, passed to changed-files unchanged."
+    required: false
+    default: ""
+  base:
+    description: "Override the base commit of the compare range for the submodule check."
+    required: false
+    default: ""
+  head:
+    description: "Override the head commit of the compare range for the submodule check."
+    required: false
+    default: ""
+
+outputs:
+  changed:
+    description: "'true' if a matching file changed or a matching submodule pointer moved."
+    value: ${{ steps.submodules.outputs.changed }}
+  submodules:
+    description: >
+      Space-separated paths of the moved submodules that match the globs, for logs
+      (a path containing a space is ambiguous here; `changed` is not).
+    value: ${{ steps.submodules.outputs.submodules }}
+  any_modified:
+    description: "changed-files' raw `any_modified` (blind to submodule moves)."
+    value: ${{ steps.changed-files.outputs.any_modified }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check changed files
+      id: changed-files
+      # SHA-pinned: this action's tags were retargeted in a 2025 supply-chain attack.
+      uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
+      with:
+        files: ${{ inputs.files }}
+        files_ignore: ${{ inputs.files_ignore }}
+
+    - name: Check moved submodules
+      id: submodules
+      shell: bash
+      env:
+        ANY_MODIFIED: ${{ steps.changed-files.outputs.any_modified }}
+        FILES: ${{ inputs.files }}
+        FILES_IGNORE: ${{ inputs.files_ignore }}
+        BASE_OVERRIDE: ${{ inputs.base }}
+        HEAD_OVERRIDE: ${{ inputs.head }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PUSH_BEFORE_SHA: ${{ github.event.before }}
+        PUSH_FORCED: ${{ github.event.forced }}
+        MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        HEAD_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        export LC_ALL=C # byte-wise pattern edits on paths that may not be UTF-8
+        submodules=""
+        tmp=$(mktemp -d "${RUNNER_TEMP:-/tmp}/changed-paths.XXXXXX")
+        trap 'rm -rf "$tmp"' EXIT
+
+        # Path bytes are untrusted: a newline would forge outputs or workflow commands.
+        oneline() { printf '%s\n' "${1//[$'\n\r']/?}"; }
+        finish() {
+          local changed=false
+          if [ "$ANY_MODIFIED" = true ] || [ "$1" = true ]; then changed=true; fi
+          oneline "changed=$changed submodules=$submodules"
+          { oneline "submodules=$submodules"; echo "changed=$changed"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+        fail_closed() {
+          oneline "::warning::$1; treating moved submodules as changed"
+          finish true
+        }
+        # Separate from any filter, so a git failure can't read as "no match".
+        git_diff() {
+          local out=$1 rc=0
+          shift
+          git -c core.quotePath=false diff --no-renames --ignore-submodules=none "$@" > "$out" ||
+            rc=$?
+          [ "$rc" -eq 0 ] || fail_closed "git diff $* failed (exit $rc)"
+        }
+
+        base=$BASE_OVERRIDE
+        head=$HEAD_OVERRIDE
+        case "$EVENT_NAME" in
+          pull_request)
+            head=${head:-$PR_HEAD_SHA}
+            if [ -z "$base" ]; then
+              base=$(git merge-base "$PR_BASE_SHA" "$head") ||
+                fail_closed "No merge base for '$PR_BASE_SHA' and '$head'"
+            fi ;;
+          push)
+            if [ "$PUSH_FORCED" = true ] && [ -z "$BASE_OVERRIDE" ]; then
+              fail_closed "Forced push: changed-files compares HEAD^..HEAD, not before..sha"
+            fi
+            base=${base:-$PUSH_BEFORE_SHA}
+            head=${head:-$HEAD_SHA} ;;
+          merge_group)
+            base=${base:-$MERGE_GROUP_BASE_SHA}
+            head=${head:-$MERGE_GROUP_HEAD_SHA} ;;
+          *)
+            if [ -z "$base" ] || [ -z "$head" ]; then
+              fail_closed "No compare range for event '$EVENT_NAME'"
+            fi ;;
+        esac
+        for sha in "$base" "$head"; do
+          if [[ -z $sha || $sha =~ ^0+$ ]] || ! git rev-parse --verify --quiet "${sha}^{commit}" > /dev/null; then
+            fail_closed "Cannot resolve commit '$sha'"
+          fi
+        done
+
+        # A gitlink on either side catches added and removed submodules, with or
+        # without a .gitmodules entry; --ignore-submodules=none overrides `ignore = all`.
+        git_diff "$tmp/raw" --raw -z "$base" "$head"
+        declare -A moved=()
+        while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+          read -r old_mode new_mode _ <<< "${meta#:}"
+          if [ "$old_mode" = 160000 ] || [ "$new_mode" = 160000 ]; then moved[$path]=1; fi
+        done < "$tmp/raw"
+        if [ "${#moved[@]}" -eq 0 ]; then
+          echo "No submodule pointer moved between $base and $head"
+          finish false
+        fi
+        echo "Submodule pointers moved between $base and $head:"
+        for path in "${!moved[@]}"; do oneline "  $path"; done
+
+        specs=()
+        unsupported=()
+        add_spec() {
+          local magic=$1 p=$2 prefix last
+          # picomatch drops a leading ./; git would too, but not once it is rewritten below.
+          while [[ $p == ./* ]]; do p=${p#./}; done
+          case "$p" in
+            *[{}\(\)\|\\]* | *'[!'* | '!'*) unsupported+=("$p"); return ;;
+          esac
+          if [[ $p != *[*?[]* ]]; then
+            # git prefix-matches a wildcard-free pathspec; a one-char class makes it exact.
+            if [[ ! $p =~ ^([^A-Za-z0-9._]*)([A-Za-z0-9._])(.*)$ ]]; then
+              unsupported+=("$p")
+              return
+            fi
+            specs+=(":($magic)${BASH_REMATCH[1]}[${BASH_REMATCH[2]}]${BASH_REMATCH[3]}")
+            return
+          fi
+          specs+=(":($magic)$p")
+          if [[ $p == ?*/'**' ]]; then
+            prefix=${p%/\*\*}
+            last=${prefix##*/}
+            if [[ $last == '**' || $last != *'*'* ]]; then add_spec "$magic" "$prefix"; fi
+          fi
+        }
+        negated=false
+        while IFS= read -r p; do
+          p=${p%$'\r'}
+          [ -n "$p" ] || continue
+          [[ $p != */ ]] || p+='**'
+          if [[ $p == '!'* ]]; then
+            negated=true
+            add_spec glob,exclude "${p#!}"
+          elif $negated; then
+            unsupported+=("$p (positive after a negation)")
+          else
+            add_spec glob "$p"
+          fi
+        done <<< "$FILES"
+        while IFS= read -r p; do
+          p=${p%$'\r'}
+          [ -n "$p" ] || continue
+          p=${p#!}
+          [[ $p != */ ]] || p+='**'
+          add_spec glob,exclude "$p"
+        done <<< "$FILES_IGNORE"
+
+        if [ "${#unsupported[@]}" -gt 0 ]; then
+          submodules="${!moved[*]}"
+          fail_closed "Glob(s) without a git pathspec equivalent: ${unsupported[*]}"
+        fi
+        git_diff "$tmp/names" --name-only -z "$base" "$head" -- ${specs[@]+"${specs[@]}"}
+        matched=()
+        while IFS= read -r -d '' path; do
+          if [ -n "${moved[$path]+x}" ]; then matched+=("$path"); fi
+        done < "$tmp/names"
+        if [ "${#matched[@]}" -eq 0 ]; then
+          echo "No moved submodule matches the globs"
+          finish false
+        fi
+        submodules="${matched[*]}"
+        finish true
