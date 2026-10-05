@@ -184,7 +184,14 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------- filter
 
+def _write_excluded(path: str | None, test_ids: list[str]) -> None:
+    if path:
+        unique = list(dict.fromkeys(test_ids))
+        Path(path).write_text("\n".join(unique) + ("\n" if unique else ""))
+
+
 def cmd_filter(args: argparse.Namespace) -> int:
+    _write_excluded(args.excluded, [])
     raw = Path(args.tests).read_text().splitlines()
     tests = [l.strip() for l in raw if _TEST_ID_RE.match(l.strip())]
     marks = [l.strip() for l in Path(args.marks).read_text().splitlines() if l.strip()]
@@ -209,6 +216,7 @@ def cmd_filter(args: argparse.Namespace) -> int:
             kept.append(t)
 
     Path(args.output).write_text("\n".join(kept) + ("\n" if kept else ""))
+    _write_excluded(args.excluded, [tid for tid, _ in skipped])
     print(f"Filter: {len(tests)} -> {len(kept)} kept, {len(skipped)} skipped")
     for tid, mark in skipped[:50]:
         print(f"  - {tid}  (matched mark {mark!r})")
@@ -424,6 +432,7 @@ def main() -> int:
     p.add_argument("--tests", required=True)
     p.add_argument("--marks", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--excluded", help="Also write the dropped test ids here (empty if none)")
     p.set_defaults(func=cmd_filter)
 
     p = sub.add_parser("mark", help="Add a flaky mark")
