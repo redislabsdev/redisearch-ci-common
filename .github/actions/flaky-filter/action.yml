@@ -14,6 +14,11 @@ description: |
   `all-quarantined` output is `true` so the caller can choose to skip the shard
   entirely (an empty TESTFILE alone can't express "run nothing").
 
+  For runners that deselect rather than select, `excluded` points to the list
+  of dropped test ids (`<output>.excluded`). It always exists once the action
+  has started, and is empty on every fail-open path, so nothing is deselected
+  by mistake.
+
   Container-safe: the DB CLI is fetched into the (mounted) workspace via checkout,
   since github.action_path is not mounted in container jobs.
 
@@ -25,7 +30,7 @@ inputs:
     description: "Path to the enumerated test-id list (one RLTest id per line)."
     required: true
   output:
-    description: "Path to write the filtered TESTFILE."
+    description: "Path to write the filtered TESTFILE. The excluded list goes to `<output>.excluded`."
     required: true
   branch:
     description: "Branch to fetch marks for. Defaults to the PR / merge-queue target."
@@ -46,10 +51,26 @@ outputs:
       set is empty). Callers can skip the test step entirely in that case.
       'false' otherwise (no marks, partial filter, or any error).
     value: ${{ steps.filter.outputs.all-quarantined }}
+  excluded:
+    description: >
+      Path to the test ids the marks filtered out, one per line, in input order.
+      The file always exists; it is empty when nothing was filtered or any step
+      failed.
+    value: ${{ steps.excluded.outputs.path }}
 
 runs:
   using: composite
   steps:
+    - name: Create empty excluded list
+      # First, so `excluded` is an existing empty file even if a later step fails.
+      id: excluded
+      shell: bash -eo pipefail {0}
+      env:
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        : > "$OUTPUT.excluded"
+        echo "path=$OUTPUT.excluded" >> "$GITHUB_OUTPUT"
+
     - name: Resolve target branch
       shell: bash -l -eo pipefail {0}
       env:
@@ -112,6 +133,7 @@ runs:
         BRANCH: ${{ env.FLAKY_BRANCH }}
         TESTS: ${{ inputs.tests }}
         OUTPUT: ${{ inputs.output }}
+        EXCLUDED: ${{ steps.excluded.outputs.path }}
       run: |
         cli="$GITHUB_WORKSPACE/.redisearch-ci-common/scripts/ci_common/flaky_db.py"
         marks="$RUNNER_TEMP/flaky_marks.txt"
@@ -119,9 +141,10 @@ runs:
         python3 "$cli" fetch --output-json "$RUNNER_TEMP/flaky_marks.json" --output-list "$marks" || \
           echo "::warning::flaky fetch failed; running the full suite"
         : > "$OUTPUT"
+        : > "$EXCLUDED"
         all_quarantined=false
         if [ -s "$marks" ]; then
-          if python3 "$cli" filter --tests "$TESTS" --marks "$marks" --output "$OUTPUT"; then
+          if python3 "$cli" filter --tests "$TESTS" --marks "$marks" --output "$OUTPUT" --excluded "$EXCLUDED"; then
             if [ ! -s "$OUTPUT" ]; then
               # Output empty: distinguish "every valid test was quarantined" from
               # "the input had no valid test ids at all". Re-filter with no marks
@@ -138,6 +161,7 @@ runs:
             fi
           else
             : > "$OUTPUT"   # filter error ⇒ fail-open (full suite)
+            : > "$EXCLUDED"
           fi
         else
           echo "No active flaky marks — running the full suite"
