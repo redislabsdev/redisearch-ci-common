@@ -36,6 +36,7 @@ plumbing.
 | `setup-sccache` composite action | [`.github/actions/setup-sccache`](.github/actions/setup-sccache/action.yml) | Install sccache and, best-effort, point it at an S3 remote cache via AWS OIDC. The job must grant `id-token: write`; role/bucket/region/prefix are caller inputs. Fork PRs (no OIDC token) and missing inputs fall back to a local-only cache — never fails the job. `rustc-wrapper: 'true'` also exports `RUSTC_WRAPPER=sccache` / `CARGO_INCREMENTAL=0`. |
 | `build-rejson` composite action | [`.github/actions/build-rejson`](.github/actions/build-rejson/action.yml) | Build RedisJSON for flow tests via RediSearch's `tests/deps/setup_rejson.sh` and cache `rejson.so`, keyed on RedisJSON SHA, platform, arch, sanitizer, coverage, C compiler + build flags and the pinned nightly. `redisearch-root` points at the RediSearch checkout (`.` or a submodule path). Returns `rejson-path`; also exports `REJSON_PATH` unless `export-rejson-path: 'false'`. Container-safe. |
 | `changed-paths` composite action | [`.github/actions/changed-paths`](.github/actions/changed-paths/action.yml) | Gate CI on changed paths: tj-actions/changed-files' `any_modified` (same `files` / `files_ignore` inputs) plus submodule pointer moves, which changed-files drops when submodules aren't checked out. Read `changed`. Needs `fetch-depth: 0` and bash 4+. **Fails closed** (`changed=true` + warning) on an unresolvable range, forced push, unknown event or untranslatable glob, unlike the best-effort units here that never fail the job: for a skip-CI gate, running CI is the safe failure. |
+| `fast-track` reusable workflow | [`.github/workflows/fast-track.yml`](.github/workflows/fast-track.yml) | Approve an author's eligible PR based on its Jira `ai-fast-track` label. Uses a dedicated caller-scoped App; [policy, setup, and rollout](scripts/fast_track/README.md). |
 | `pr-size-label` reusable workflow | [`.github/workflows/pr-size-label.yml`](.github/workflows/pr-size-label.yml) | Label a PR by diff size. Add a thin `on: pull_request` caller. |
 | `spellcheck` reusable workflow | [`.github/workflows/spellcheck.yml`](.github/workflows/spellcheck.yml) | codespell over a PR's changed files. The repo supplies its own `.codespell/` config. |
 | `link-check` reusable workflow | [`.github/workflows/link-check.yml`](.github/workflows/link-check.yml) | Validate Markdown links/anchors. Self-contained — bundles `scripts/ci_common/check_links.py`. |
@@ -151,7 +152,7 @@ This repo lints its own building blocks on every PR
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): `actionlint` (workflow
 syntax, expressions, shellcheck of `run:` steps), a strict YAML check that
 rejects duplicate mapping keys across both workflows and composite actions, and
-`compileall` over the Python helpers — so a change here can't silently break a
+`compileall` over the Python helpers, and credential-free fast-track policy tests — so a change here can't silently break a
 consumed unit.
 
 ## License

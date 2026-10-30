@@ -68,10 +68,23 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
-      # Pinned to a release tag (download script + binary version both v1.7.7),
+      # Pinned to a release tag (download script + binary version both v1.7.12),
       # so the linter version can't drift under us.
       - name: Install actionlint
-        run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+        run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
 
       - name: Run actionlint
         run: ./actionlint -color
+
+      - name: Audit fast-track workflow
+        uses: zizmorcore/zizmor-action@6fc4b006235f201fdab3722e17240ab420d580e5 # v0.6.1
+        with:
+          version: 1.28.0
+          inputs: .github/workflows/fast-track.yml
+          min-severity: informational
+          min-confidence: medium
+          advanced-security: false
+          annotations: true
+
+      - name: Test fast-track approval policy
+        run: python3 -m unittest discover -s scripts/fast_track/tests -v
