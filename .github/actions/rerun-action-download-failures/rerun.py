@@ -53,10 +53,28 @@ def skip(reason):
     sys.exit(0)
 
 
-def require_first_attempt():
+def require_rerunnable():
+    """Skip unless the run is still on attempt 1 and is the PR's latest run.
+
+    The event payload is a snapshot: a manual re-run or a new push can change
+    either since, and a stale re-run would cancel a newer run of the PR.
+    """
     run = gh_api(f"repos/{repo}/actions/runs/{run_id}")
     if run["run_attempt"] != 1 or run["status"] != "completed":
         skip(f"run is now attempt {run['run_attempt']}, status {run['status']}")
+    runs = gh_api(
+        f"repos/{repo}/actions/workflows/{workflow_run['workflow_id']}/runs"
+        f"?branch={quote(workflow_run['head_branch'], safe='')}&event=pull_request&per_page=20"
+    )["workflow_runs"]
+    pr_runs = sorted(
+        (r for r in runs
+         if any(p["number"] == pr_number for p in r.get("pull_requests") or [])),
+        key=lambda r: r["run_number"], reverse=True,
+    )
+    # Fail closed: an empty or incomplete list cannot confirm this run is the newest.
+    if not pr_runs or pr_runs[0]["id"] != run_id:
+        newest = pr_runs[0]["id"] if pr_runs else "unknown"
+        skip(f"not confirmed as the latest run for PR #{pr_number} (newest: {newest})")
 
 
 if workflow_run["conclusion"] != "failure":
@@ -91,23 +109,8 @@ for job in failed:
     print(f"Job '{job['name']}' failed downloading an action in setup.")
 
 # Checked last, right before the POST, to keep the window for a manual re-run
-# or a new push as short as the API allows: the event payload is a snapshot,
-# and a stale re-run would cancel a newer run of the PR.
-require_first_attempt()
-
-runs = gh_api(
-    f"repos/{repo}/actions/workflows/{workflow_run['workflow_id']}/runs"
-    f"?branch={quote(workflow_run['head_branch'], safe='')}&event=pull_request&per_page=20"
-)["workflow_runs"]
-pr_runs = sorted(
-    (r for r in runs
-     if any(p["number"] == pr_number for p in r.get("pull_requests") or [])),
-    key=lambda r: r["run_number"], reverse=True,
-)
-# Fail closed: unless this run is the PR's newest, re-running it could cancel a newer one.
-if not pr_runs or pr_runs[0]["id"] != run_id:
-    newest = pr_runs[0]["id"] if pr_runs else "unknown"
-    skip(f"not confirmed as the latest run for PR #{pr_number} (newest: {newest})")
+# or a new push as short as the API allows.
+require_rerunnable()
 
 print(f"Re-running {len(failed)} failed job(s) of run {run_id} (PR #{pr_number}).")
 for attempt in range(1, RERUN_ATTEMPTS + 1):
@@ -116,7 +119,7 @@ for attempt in range(1, RERUN_ATTEMPTS + 1):
         sys.exit(0)
     if attempt < RERUN_ATTEMPTS:
         time.sleep(2 * attempt)
-        # An error does not prove the re-run did not start, and a blind retry
-        # after attempt 2 has failed again would start an attempt 3.
-        require_first_attempt()
+        # An error does not prove the re-run did not start, and the PR may have
+        # a newer run by now: a blind retry could start an attempt 3 or cancel it.
+        require_rerunnable()
 sys.exit(f"rerun-failed-jobs failed after {RERUN_ATTEMPTS} attempts")
