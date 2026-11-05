@@ -37,7 +37,8 @@ inputs:
     required: false
     default: pr-validation
   github-token:
-    description: Token with `actions: write` and `checks: read` on the calling repository.
+    description: >
+      Token with `actions: write` and `checks: read` on the calling repository.
     required: false
     default: ${{ github.token }}
 
