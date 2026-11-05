@@ -21,13 +21,16 @@ description: |
   - The run is for a pull request from a branch of the calling repository (so
     no bot-initiated re-run of fork code), and it failed on its first attempt.
     A persistent failure therefore stays red after one retry instead of looping.
+    Merge-queue runs are skipped: a failed one has already removed the PR from
+    the queue, and re-running it would not put the PR back.
   - Every failed job other than `gate-job` carries the runner's download-failure
     annotation. Any other failure means a human looks first. The gate fails
     whenever anything it needs fails, and re-running failed jobs also re-runs
     their dependents, so the gate is re-evaluated on the same run.
-  - Right before the re-run request, the run is still on attempt 1 and is still
-    the latest run of its workflow for the PR. Re-running a superseded run
-    would join the PR's concurrency group and cancel the newer run.
+  - Right before the re-run request, the run is still on attempt 1 and is
+    confirmed as the latest run of its workflow for the PR. Re-running a
+    superseded run would join the PR's concurrency group and cancel the newer
+    run, so a run that cannot be confirmed as the latest is not re-run.
 
 inputs:
   gate-job:

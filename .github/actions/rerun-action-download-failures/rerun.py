@@ -28,6 +28,7 @@ run_id = workflow_run["id"]
 
 
 def try_gh_api(path, *args):
+    # gh authenticates with GH_TOKEN, which action.yml sets from the github-token input.
     result = subprocess.run(
         ["gh", "api", *args, path], capture_output=True, text=True,
     )
@@ -98,12 +99,15 @@ runs = gh_api(
     f"repos/{repo}/actions/workflows/{workflow_run['workflow_id']}/runs"
     f"?branch={quote(workflow_run['head_branch'], safe='')}&event=pull_request&per_page=20"
 )["workflow_runs"]
-pr_runs = [
-    r for r in runs
-    if any(p["number"] == pr_number for p in r.get("pull_requests") or [])
-]
-if pr_runs and pr_runs[0]["id"] != run_id:
-    skip(f"superseded by run {pr_runs[0]['id']} for PR #{pr_number}")
+pr_runs = sorted(
+    (r for r in runs
+     if any(p["number"] == pr_number for p in r.get("pull_requests") or [])),
+    key=lambda r: r["run_number"], reverse=True,
+)
+# Fail closed: unless this run is the PR's newest, re-running it could cancel a newer one.
+if not pr_runs or pr_runs[0]["id"] != run_id:
+    newest = pr_runs[0]["id"] if pr_runs else "unknown"
+    skip(f"not confirmed as the latest run for PR #{pr_number} (newest: {newest})")
 
 print(f"Re-running {len(failed)} failed job(s) of run {run_id} (PR #{pr_number}).")
 for attempt in range(1, RERUN_ATTEMPTS + 1):
