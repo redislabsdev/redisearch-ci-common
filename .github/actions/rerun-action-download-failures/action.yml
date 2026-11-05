@@ -1,0 +1,52 @@
+name: Re-run action download failures
+description: |
+  Re-runs the failed jobs of a failed pull-request run, once, when every failure
+  is the runner failing to download an action archive in "Set up job".
+
+  The runner downloads every action a job references before any step runs,
+  including ones whose step `if:` later skips. actions/runner treats a 404 from
+  codeload.github.com as permanent and gives up after one attempt, so a
+  transient codeload error ("An action could not be found at the URI ...",
+  "Failed to download archive ... after 1 attempts") fails the job, and the
+  PR's gate job with it, even though the pinned SHA exists. No step-level retry
+  can help, because no step has started.
+
+  Call it from a job triggered by `workflow_run: types: [completed]` on the
+  repo's PR workflow. The job needs `actions: write` (read the run's jobs, call
+  rerun-failed-jobs) and `checks: read` (the job annotations carry the runner's
+  error), plus `python3` and `gh` on the runner. It needs no checkout.
+
+  It re-runs only when all of these hold, and otherwise exits successfully
+  without re-running:
+  - The run is for a pull request from a branch of the calling repository (so
+    no bot-initiated re-run of fork code), and it failed on its first attempt.
+    A persistent failure therefore stays red after one retry instead of looping.
+  - Every failed job other than `gate-job` carries the runner's download-failure
+    annotation. Any other failure means a human looks first. The gate fails
+    whenever anything it needs fails, and re-running failed jobs also re-runs
+    their dependents, so the gate is re-evaluated on the same run.
+  - Right before the re-run request, the run is still on attempt 1 and is still
+    the latest run of its workflow for the PR. Re-running a superseded run
+    would join the PR's concurrency group and cancel the newer run.
+
+inputs:
+  gate-job:
+    description: >
+      Name of the PR's gate job, which fails whenever the jobs it needs fail.
+      Its own failure is not required to carry the download error.
+    required: false
+    default: pr-validation
+  github-token:
+    description: Token with `actions: write` and `checks: read` on the calling repository.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Re-run failed jobs if all failed downloading an action
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GATE_JOB: ${{ inputs.gate-job }}
+      run: python3 "$GITHUB_ACTION_PATH/rerun.py"

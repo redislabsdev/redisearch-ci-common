@@ -27,7 +27,7 @@ jobs:
           python-version: '3.x'
 
       - name: Compile Python helpers
-        run: python -m compileall -q scripts
+        run: python -m compileall -q scripts .github/actions
 
       - name: Validate YAML (parse + reject duplicate keys)
         run: |
