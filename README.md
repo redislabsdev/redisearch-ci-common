@@ -31,6 +31,7 @@ plumbing.
 
 | Unit | Path | Purpose |
 |---|---|---|
+| `retry-command` composite action | [`.github/actions/retry-command`](.github/actions/retry-command/action.yml) | Run a shell command with bounded retries (five attempts, 30-second delays by default). Supports a working directory and an optional step-scoped GitHub token. Inline implementation works before checkout and in containers, provided Bash is installed. |
 | `checkout-isolated` composite action | [`.github/actions/checkout-isolated`](.github/actions/checkout-isolated/action.yml) | A job's **first** step: bypass a persistent self-hosted runner's leftover global/system git config and drop a reused `.git`, then check out. Has to be consumed from here — a local `./` copy is resolved from the workspace, which is empty before the checkout it performs. |
 | `slack-notify` composite action | [`.github/actions/slack-notify`](.github/actions/slack-notify/action.yml) | Post a payload to a Slack webhook — replaces every repo's hand-rolled "notify failure" step. Webhook is a caller secret. |
 | `setup-sccache` composite action | [`.github/actions/setup-sccache`](.github/actions/setup-sccache/action.yml) | Install sccache and, best-effort, point it at an S3 remote cache via AWS OIDC. The job must grant `id-token: write`; role/bucket/region/prefix are caller inputs. Fork PRs (no OIDC token) and missing inputs fall back to a local-only cache — never fails the job. `rustc-wrapper: 'true'` also exports `RUSTC_WRAPPER=sccache` / `CARGO_INCREMENTAL=0`. |
@@ -75,6 +76,31 @@ RLTest suites can quarantine known-flaky tests consistently.
 - Outbound network is granted only via the codex network override (for
   `git push` / `gh`) — far narrower than `danger-full-access`.
 - `safety-strategy: drop-sudo` blocks privilege escalation on the runner.
+
+## Retrying setup commands
+
+```yaml
+- name: Install setup dependencies
+  uses: redislabsdev/redisearch-ci-common/.github/actions/retry-command@v1
+  with:
+    command: apt-get update && apt-get install -y curl
+    max_retries: '5'
+    retry_delay: '30'
+```
+
+The action preserves RediSearch's `retry-command` inputs and behavior. Commands
+run in `bash -l -eo pipefail`; `working_directory` defaults to `.`. The action
+fails if every attempt fails. Because Bash evaluates the command in an `if`,
+join dependent commands with `&&` or explicitly return failure; do not rely on
+`errexit` to stop a multi-command sequence.
+
+Pass `github_token` only when the command needs authenticated GitHub access;
+it is exported as `GITHUB_TOKEN` for that step. Commands are shell code: pass
+variable data through step `env` and quote it in the command.
+
+The action needs no checkout of its own. Commands that use repository files
+still need the caller's checkout first. Consumers can switch to `@v1` after
+a release containing this action updates that tag.
 
 ## Using the composite action (step-level)
 
