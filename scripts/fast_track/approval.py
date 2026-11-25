@@ -168,6 +168,16 @@ def reconcile_submission(github, path, bot_login, head_sha, submission_marker):
     raise Rejected("Approval submission failed; matching review reconciled; request approval again")
 
 
+def latest_app_review(github, path, bot_login):
+    """Find the App's latest review that can affect approval."""
+    latest = None
+    for review in reviews_for_pr(github, path):
+        if review["user"]["login"] == bot_login and review["state"] != "COMMENTED":
+            if latest is None or review["id"] > latest["id"]:
+                latest = review
+    return latest
+
+
 def approve(github, jira, decision, bot_login, run_url, default_branch):
     """Revalidate authority and approve only the recorded revision."""
     if not decision.eligible:
@@ -177,11 +187,7 @@ def approve(github, jira, decision, bot_login, run_url, default_branch):
     if bot_login.casefold() == decision.requester.casefold():
         raise Rejected("Approval App must not be the PR author")
     path = f"/repos/{decision.repository}/pulls/{decision.pr_number}"
-    latest = None
-    for review in reviews_for_pr(github, path):
-        if review["user"]["login"] == bot_login and review["state"] != "COMMENTED":
-            if latest is None or review["id"] > latest["id"]:
-                latest = review
+    latest = latest_app_review(github, path, bot_login)
     # Pagination may take time; refresh external authority after it completes.
     fresh = validate(github, jira, decision.repository, decision.pr_number, decision.requester, default_branch)
     if not fresh.eligible:
@@ -203,31 +209,39 @@ def approve(github, jira, decision, bot_login, run_url, default_branch):
     snapshot = snapshot[:4] + (snapshot[4].casefold(),) + snapshot[5:]
     if snapshot != expected:
         raise Rejected("PR changed before approval; request approval again")
+    def check_pr():
+        if pr_snapshot(github.request(path)) != pr_snapshot(pr):
+            raise Rejected("PR changed during approval; request approval again")
+
+    return submit_approval(
+        github, path, bot_login, decision.head_sha, check_pr,
+        f"{MARKER}\nPolicy approval: Jira `{LABEL}` (not a code review).\n\n"
+        f"Ticket: {decision.ticket}\n"
+        f"{JIRA_URL}/browse/{decision.ticket}\n\n"
+        f"Requested by: @{decision.requester}\n"
+        f"Head: `{decision.head_sha}`\n"
+        f"Workflow: {run_url}\n\n"
+        "CI and merge-queue requirements remain in force.",
+    )
+
+
+def submit_approval(github, path, bot_login, head_sha, recheck, body):
+    """Post a review once and revoke it if the caller's final check fails."""
     submission_marker = f"<!-- fast-track-submission:{uuid.uuid4()} -->"
     payload = {
         "event": "APPROVE",
-        "commit_id": decision.head_sha,
-        "body": (
-            f"{MARKER}\n{submission_marker}\nPolicy approval: Jira `{LABEL}` (not a code review).\n\n"
-            f"Ticket: {decision.ticket}\n"
-            f"{JIRA_URL}/browse/{decision.ticket}\n\n"
-            f"Requested by: @{decision.requester}\n"
-            f"Head: `{decision.head_sha}`\n"
-            f"Workflow: {run_url}\n\n"
-            "CI and merge-queue requirements remain in force."
-        ),
+        "commit_id": head_sha,
+        "body": f"{submission_marker}\n{body}",
     }
     try:
         review = github.request(path + "/reviews", "POST", payload)
         if not isinstance(review.get("id"), int):
             raise Rejected("Malformed approval response")
     except Exception:
-        reconcile_submission(github, path, bot_login, decision.head_sha, submission_marker)
-    # The reviews API has no compare-and-swap. Compensate if the PR changes
-    # during submission; branch rules also require approval of the latest push.
+        reconcile_submission(github, path, bot_login, head_sha, submission_marker)
+    # The reviews API has no compare-and-swap.
     try:
-        if pr_snapshot(github.request(path)) != pr_snapshot(pr):
-            raise Rejected("PR changed during approval; request approval again")
+        recheck()
     except Exception:
         github.request(f"{path}/reviews/{review['id']}/dismissals", "PUT", {
             "message": "Fast-track approval invalidated: PR changed or could not be rechecked."
